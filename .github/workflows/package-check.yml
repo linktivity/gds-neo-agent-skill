@@ -1,11 +1,13 @@
-name: Check packaged skill is up to date
+name: Check packaged skills are up to date
 
-# dist/gds-neo-api.skill is a hand-triggered build of
-# plugins/gds-neo-api/skills/gds-neo-api/, committed straight into the repo. Nothing
-# stops it drifting from the source it's supposed to mirror, so this rebuilds it on
-# every push/PR and fails if the rebuilt content differs from what's committed.
+# Each dist/<skill-name>.skill is a hand-triggered build of the matching
+# plugins/gds-neo-api/skills/<skill-name>/, committed straight into the repo.
+# Nothing stops one drifting from the source it's supposed to mirror, so this
+# rebuilds every package on every push/PR and fails if any rebuilt content
+# differs from what's committed, or if a package and a skill directory don't
+# both exist.
 #
-# Comparing the two .skill files byte-for-byte would false-positive on every run,
+# Comparing the .skill files byte-for-byte would false-positive on every run,
 # since checked-out files get a fresh mtime and zip embeds per-entry timestamps.
 # Comparing extracted contents instead makes the check timestamp-independent.
 
@@ -23,18 +25,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Rebuild the package from source
-        run: scripts/package_skill.sh /tmp/rebuilt.skill
+      - name: Rebuild every package from source
+        run: scripts/package_skill.sh --out-dir /tmp/rebuilt
 
-      - name: Compare rebuilt contents against the committed package
+      - name: Compare rebuilt packages against the committed ones
         run: |
-          mkdir -p /tmp/dist-check/committed /tmp/dist-check/rebuilt
-          unzip -q dist/gds-neo-api.skill -d /tmp/dist-check/committed
-          unzip -q /tmp/rebuilt.skill -d /tmp/dist-check/rebuilt
+          shopt -s nullglob
+          status=0
 
-          if ! diff -rq /tmp/dist-check/committed /tmp/dist-check/rebuilt; then
-            echo "::error::dist/gds-neo-api.skill is out of date with plugins/gds-neo-api/skills/gds-neo-api/."
-            echo "Run 'scripts/package_skill.sh' locally and commit the result."
-            exit 1
-          fi
-          echo "dist/gds-neo-api.skill matches plugins/gds-neo-api/skills/gds-neo-api/."
+          for src in plugins/gds-neo-api/skills/*/; do
+            name="$(basename "$src")"
+            committed="dist/$name.skill"
+            rebuilt="/tmp/rebuilt/$name.skill"
+
+            if [ ! -f "$committed" ]; then
+              echo "::error::missing $committed for skill '$name'. Run 'scripts/package_skill.sh' and commit the result."
+              status=1
+              continue
+            fi
+
+            mkdir -p "/tmp/dist-check/$name/committed" "/tmp/dist-check/$name/rebuilt"
+            unzip -q "$committed" -d "/tmp/dist-check/$name/committed"
+            unzip -q "$rebuilt" -d "/tmp/dist-check/$name/rebuilt"
+
+            if ! diff -rq "/tmp/dist-check/$name/committed" "/tmp/dist-check/$name/rebuilt"; then
+              echo "::error::$committed is out of date with plugins/gds-neo-api/skills/$name/. Run 'scripts/package_skill.sh' and commit the result."
+              status=1
+            fi
+          done
+
+          for committed in dist/*.skill; do
+            name="$(basename "$committed" .skill)"
+            if [ ! -d "plugins/gds-neo-api/skills/$name" ]; then
+              echo "::error::$committed has no matching skill directory (plugins/gds-neo-api/skills/$name/). Remove the stale package or restore the skill."
+              status=1
+            fi
+          done
+
+          exit "$status"
