@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Rebuilds dist/*.skill from staged skill sources before the commit is made,
+# and stages the result, so a commit never ships a stale package.
+#
+# Not active until enabled once per clone with:
+#   git config core.hooksPath .githooks
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if ! git diff --cached --name-only | grep -q '^plugins/gds-neo-api/skills/'; then
+  exit 0
+fi
+
+scripts/package_skill.sh
+
+if [ -n "$(git status --porcelain -- dist/)" ]; then
+  git add dist/
+  echo "pre-commit: rebuilt dist/*.skill from the staged skill changes and staged the result."
+fi

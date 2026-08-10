@@ -90,6 +90,27 @@ python3 scripts/gds_sign.py verify \
 hex-encoded intermediates between HMAC steps, standard instead of URL-safe base64, stripped
 `=` padding, a scheme left on the host, transposed message and key arguments, and so on.
 
+## Contributing
+
+`dist/*.skill` is a packaged copy of `plugins/gds-neo-api/skills/*/`, committed alongside the
+source (see [Install](#install) above). After editing anything under `plugins/gds-neo-api/skills/`,
+rebuild it:
+
+```bash
+scripts/package_skill.sh
+```
+
+To do that automatically, enable the repo's pre-commit hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+It reruns `scripts/package_skill.sh` and stages the result whenever a commit touches
+`plugins/gds-neo-api/skills/`. Either way, `.github/workflows/package-check.yml` rebuilds and
+diffs every package in CI, so an out-of-date `dist/*.skill` fails the check rather than merging
+silently.
+
 ## Support
 
 Questions about the API itself, credentials, or supplier entitlement:
