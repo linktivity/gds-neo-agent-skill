@@ -1,0 +1,19 @@
+{
+  "name": "linktivity-gds",
+  "owner": {
+    "name": "Linktivity Inc.",
+    "email": "info@linktivity.co.jp",
+    "url": "https://www.linktivity.co.jp"
+  },
+  "metadata": {
+    "description": "GDS NEO skills",
+    "version": "0.0.1"
+  },
+  "plugins": [
+    {
+      "name": "gds-neo-api",
+      "source": "./plugins/gds-neo-api",
+      "description": "Integration support for the Linktivity GDS API (GDS-neo / open-agent). Answers questions about the signature-key HMAC authentication, endpoint parameters and response fields, the reserve-then-confirm booking and cancellation flows, participant_info and booking_form mapping, and error diagnosis."
+    }
+  ]
+}

@@ -1,0 +1,96 @@
+name: Check for API spec drift
+
+# The bundled spec is a snapshot, and the reference files assert specific things about it.
+# When the published spec changes, those assertions can silently become wrong. This opens a
+# PR so a human reviews what moved.
+
+on:
+  schedule:
+    - cron: '0 1 * * 1'   # Mondays, 01:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Fetch the published spec and validate it
+        working-directory: plugins/gds-neo-api/skills/gds-neo-api
+        run: python3 scripts/fetch_spec.py --force
+
+      - name: Summarise what changed
+        id: diff
+        working-directory: plugins/gds-neo-api/skills/gds-neo-api
+        run: |
+          if git diff --quiet -- assets/gds_api.swagger.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Spec unchanged."
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, subprocess
+          new = json.load(open('assets/gds_api.swagger.json'))
+          old = json.loads(subprocess.run(
+              ['git', 'show', 'HEAD:plugins/gds-neo-api/skills/gds-neo-api/assets/gds_api.swagger.json'],
+              capture_output=True, text=True, check=True).stdout)
+
+          def report(label, a, b):
+              added, removed = sorted(set(b) - set(a)), sorted(set(a) - set(b))
+              print(f"\n### {label}\n")
+              print(f"- added: {added or 'none'}")
+              print(f"- removed: {removed or 'none'}")
+              return added, removed
+
+          print("## API spec drift")
+          print(f"\nversion: `{old.get('info',{}).get('version')}` -> "
+                f"`{new.get('info',{}).get('version')}`")
+          report("Operations", old.get('paths', {}), new.get('paths', {}))
+          report("Definitions", old.get('definitions', {}), new.get('definitions', {}))
+
+          # Enum churn is the most common silent breakage for integrators.
+          print("\n### Enum value changes\n")
+          churn = False
+          for name in sorted(set(old.get('definitions', {})) & set(new.get('definitions', {}))):
+              o, n = old['definitions'][name], new['definitions'][name]
+              if 'enum' in o and 'enum' in n and o['enum'] != n['enum']:
+                  churn = True
+                  print(f"- `{name}`: +{sorted(set(n['enum'])-set(o['enum']))} "
+                        f"-{sorted(set(o['enum'])-set(n['enum']))}")
+          if not churn:
+              print("- none")
+
+          print("\n### Review checklist\n")
+          print("- [ ] `references/troubleshooting.md` -> \"Known spec quirks\": any fixed upstream?")
+          print("- [ ] `references/endpoints.md`: new or changed parameters and required flags")
+          print("- [ ] `references/enums.md`: new enum values")
+          print("- [ ] `scripts/fetch_spec.py`: update `EXPECTED_PATHS` / `EXPECTED_DEFINITIONS`")
+          print("- [ ] Bump `version` in `plugins/gds-neo-api/.claude-plugin/plugin.json`")
+          PY
+
+      - name: Open a pull request
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: spec-drift
+          title: 'The GDS API spec changed — review the reference files'
+          body: |
+            `scripts/fetch_spec.py` picked up a change in the published OpenAPI spec.
+
+            The reference files in this skill assert specific things about the spec, so a
+            change here can silently make them wrong. See the workflow run's summary for
+            what moved and a review checklist.
+
+            Do not merge without checking the reference files — a stale reference that reads
+            as authoritative is worse than no reference.
+          commit-message: 'Refresh bundled GDS API spec'
+          labels: spec-drift
