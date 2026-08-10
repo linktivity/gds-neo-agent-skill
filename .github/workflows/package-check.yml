@@ -1,0 +1,40 @@
+name: Check packaged skill is up to date
+
+# dist/gds-neo-api.skill is a hand-triggered build of
+# plugins/gds-neo-api/skills/gds-neo-api/, committed straight into the repo. Nothing
+# stops it drifting from the source it's supposed to mirror, so this rebuilds it on
+# every push/PR and fails if the rebuilt content differs from what's committed.
+#
+# Comparing the two .skill files byte-for-byte would false-positive on every run,
+# since checked-out files get a fresh mtime and zip embeds per-entry timestamps.
+# Comparing extracted contents instead makes the check timestamp-independent.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rebuild the package from source
+        run: scripts/package_skill.sh /tmp/rebuilt.skill
+
+      - name: Compare rebuilt contents against the committed package
+        run: |
+          mkdir -p /tmp/dist-check/committed /tmp/dist-check/rebuilt
+          unzip -q dist/gds-neo-api.skill -d /tmp/dist-check/committed
+          unzip -q /tmp/rebuilt.skill -d /tmp/dist-check/rebuilt
+
+          if ! diff -rq /tmp/dist-check/committed /tmp/dist-check/rebuilt; then
+            echo "::error::dist/gds-neo-api.skill is out of date with plugins/gds-neo-api/skills/gds-neo-api/."
+            echo "Run 'scripts/package_skill.sh' locally and commit the result."
+            exit 1
+          fi
+          echo "dist/gds-neo-api.skill matches plugins/gds-neo-api/skills/gds-neo-api/."
