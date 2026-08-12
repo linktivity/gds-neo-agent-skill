@@ -40,6 +40,13 @@ Requires code execution to be enabled on your account. Skills uploaded this way 
 your own account — if your whole team needs it, ask an organization owner to provision it under
 **Organization settings → Skills** (Team and Enterprise plans).
 
+### Codex CLI
+
+```
+codex plugin marketplace add linktivity/gds-neo-agent-skill
+codex plugin add gds-neo-api@linktivity-gds
+```
+
 ### Any other agent, or manual use
 
 The skill is plain Markdown plus two Python scripts. Clone the repo and point your tool at

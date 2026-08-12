@@ -1,0 +1,18 @@
+{
+  "name": "linktivity-gds",
+  "interface": {
+    "displayName": "Linktivity GDS"
+  },
+  "plugins": [
+    {
+      "name": "gds-neo-api",
+      "description": "Integration support for the Linktivity GDS API (GDS-neo / open-agent). Answers questions about the signature-key HMAC authentication, endpoint parameters and response fields, the reserve-then-confirm booking and cancellation flows, participant_info and booking_form mapping, and error diagnosis.",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/linktivity/gds-neo-agent-skill.git",
+        "path": "./plugins/gds-neo-api",
+        "ref": "master"
+      }
+    }
+  ]
+}

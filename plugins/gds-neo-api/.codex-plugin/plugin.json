@@ -1,0 +1,24 @@
+{
+  "name": "gds-neo-api",
+  "description": "Integration support for the Linktivity GDS API: authentication and signature debugging, endpoint and field reference, end-to-end booking flow, and error diagnosis.",
+  "version": "1.1.0",
+  "author": {
+    "name": "Linktivity Inc.",
+    "email": "info@linktivity.co.jp",
+    "url": "https://www.linktivity.co.jp"
+  },
+  "homepage": "https://linktivity.github.io/gds-neo-proto-public/apidoc/",
+  "repository": "https://github.com/linktivity/gds-neo-agent-skill",
+  "keywords": [
+    "linktivity",
+    "gds",
+    "gds-neo",
+    "open-agent",
+    "ota",
+    "travel",
+    "booking",
+    "api-integration",
+    "japan"
+  ],
+  "skills": "./skills/"
+}
