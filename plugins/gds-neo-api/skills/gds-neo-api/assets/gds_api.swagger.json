@@ -1624,7 +1624,7 @@
           },
           {
             "name": "page_size",
-            "description": "number of bookings to return per page.",
+            "description": "單頁上限 100：對外訂單列表與內部 book 服務同一個數字。\n為什麼是 100：每筆訂單超過 20KB，100 筆約 2MB，守得住單一回應 4MB 的預算；超過 100 直接回 400，不靜默收斂。\n\nnumber of bookings to return per page. Maximum 100; larger values are rejected with 400.",
             "in": "query",
             "required": false,
             "type": "integer",
