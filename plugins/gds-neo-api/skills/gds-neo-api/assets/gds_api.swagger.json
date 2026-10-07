@@ -6804,6 +6804,12 @@
             "ISSUED"
           ]
         },
+        "issued_status_updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "example": "2026-04-01T14:53:34.000Z",
+          "description": "Timestamp in RFC3339 format when the voucher was first issued (issued_status became ISSUED or PARTIAL). Switching between PARTIAL and ISSUED does not change it. null when the booking is not issued, including after an issuance is reverted. e.g. 2026-04-01T14:53:34.000Z"
+        },
         "order_count": {
           "type": "string",
           "format": "int64",
