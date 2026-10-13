@@ -1,7 +1,7 @@
 {
   "info": {
     "title": "Linktivity GDS API",
-    "description": "# Introduction\nThe GDS API are interfaces to allow you to access our system using your OTA account. We provide a number of functions divided into these categories:\n\n  - [Partner](#tag/Partner) - Get a list of suppliers and OTAs. \n  - [Activity](#tag/Activity) - Search activities and get detailed activity information. \n  - [Availability](#tag/Availability) - Get availability calendar and check availability for a request date.\n  - [Booking](#tag/Booking) - Create, modify, cancel a booking.\n\n> Using an AI coding agent to integrate? Install the [GDS API agent skill](https://github.com/linktivity/gds-neo-agent-skill) for signature debugging, endpoint reference, and booking-flow guidance grounded in this spec.\n\n# Authentication\nThe GDS API uses API Key Authentication. This request authentication method require 5 custom headers:\n  - `timestamp`\n  - `ota-id`\n  - `group-id`\n  - `api-key-id`\n  - `signature-key`\n\n## Signature Algorithm\n\n`signature-key` is a chained **HMAC-SHA256** over your secret API key, the request `timestamp`, the request `host`, and the request `path`, finalised with a fixed salt, then base64-url encoded (with `=` padding).\n\n```\nk1 = HMAC-SHA256( key = \"congaree\" + apiKeySecret, msg = timestamp )\nk2 = HMAC-SHA256( key = k1,                         msg = host      )\nk3 = HMAC-SHA256( key = k2,                         msg = path      )\nk  = HMAC-SHA256( key = k3,                         msg = \"veltra\"  )\nsignatureKey = base64url(k)        # keep '=' padding\n```\n\nInputs:\n\n| Name | Source |\n| --- | --- |\n| `apiKeySecret` | The secret paired with your `api-key-id` (out-of-band issued) |\n| `timestamp` | Same value as the `timestamp` header, e.g. `20260521T063324Z` |\n| `host` | Request host, e.g. `open-agent.gds-neo.link-dev.link` |\n| `path` | Request path only, e.g. `/v1/activity/search-activities` (no query string, no fragment) |\n\n### Reference implementation\n\n```go\nfunc signatureKey(apiKeySecret, timestamp, host, path string) string {\n    h := func(key, msg []byte) []byte {\n        m := hmac.New(sha256.New, key)\n        m.Write(msg)\n        return m.Sum(nil)\n    }\n    k1 := h([]byte(\"congaree\"+apiKeySecret), []byte(timestamp))\n    k2 := h(k1, []byte(host))\n    k3 := h(k2, []byte(path))\n    k  := h(k3, []byte(\"veltra\"))\n    return base64.URLEncoding.EncodeToString(k)\n}\n```\n\n## Client snippets\n\nSelf-contained, runnable examples in several languages.\n\n**JavaScript (Postman pre-request)**\n\n```js\n// Postman pre-request script.\n// Sets the `timestamp` and `signature-key` headers for GDS API requests.\n\nconst apiKey = \"YOUR_API_KEY\";\n\n// Resolve Postman variables; strip any scheme from host, normalize path.\nconst host = pm.variables.replaceIn(pm.request.url.getHost()).replace(/^https?:\\/\\//i, \"\");\nconst path = pm.variables.replaceIn(\"/\" + pm.request.url.getPath()).replace(/\\/+/g, \"/\");\n\n// UTC timestamp in YYYYMMDDTHHMMSSZ format.\nconst timestamp = new Date().toISOString().replace(/[-:]|\\.\\d+/g, \"\");\n\n// Chained HMAC-SHA256.\nconst hmac = (key, msg) => CryptoJS.HmacSHA256(msg, key);\nconst k1 = hmac(\"congaree\" + apiKey, timestamp);\nconst k2 = hmac(k1, host);\nconst k3 = hmac(k2, path);\nconst k  = hmac(k3, \"veltra\");\n\n// Base64 URL-safe encoding. Keep the \"=\" padding; the server requires it.\nconst signature = CryptoJS.enc.Base64.stringify(k)\n    .replace(/\\+/g, \"-\")\n    .replace(/\\//g, \"_\");\n\npm.request.headers.upsert({ key: \"timestamp\",     value: timestamp });\npm.request.headers.upsert({ key: \"signature-key\", value: signature });\n```\n\n**Go**\n\n```go\npackage main\n\nimport (\n    \"crypto/hmac\"\n    \"crypto/sha256\"\n    \"encoding/base64\"\n    \"fmt\"\n    \"io\"\n    \"net/http\"\n    \"time\"\n)\n\n// Compute the `signature-key` header value for a GDS API request.\n// The algorithm chains HMAC-SHA256 four times, then base64-URL encodes the result.\nfunc signatureKey(apiKey, timestamp, host, path string) string {\n    hmacSHA256 := func(key, msg []byte) []byte {\n        h := hmac.New(sha256.New, key)\n        h.Write(msg)\n        return h.Sum(nil)\n    }\n    k1 := hmacSHA256([]byte(\"congaree\"+apiKey), []byte(timestamp))\n    k2 := hmacSHA256(k1, []byte(host))\n    k3 := hmacSHA256(k2, []byte(path))\n    k  := hmacSHA256(k3, []byte(\"veltra\"))\n    // Keep the \"=\" padding; the server requires it.\n    return base64.URLEncoding.EncodeToString(k)\n}\n\nfunc main() {\n    const (\n        apiKey = \"YOUR_API_KEY\"\n        host   = \"open-agent.gds-neo.link-dev.link\"\n        path   = \"/v1/activity/search-activities\"\n    )\n    timestamp := time.Now().UTC().Format(\"20060102T150405Z\")\n    sig := signatureKey(apiKey, timestamp, host, path)\n\n    req, _ := http.NewRequest(\"GET\", \"https://\"+host+path+\"?page_size=20\", nil)\n    req.Header.Set(\"ota-id\", \"LINKTIVITY\")\n    req.Header.Set(\"group-id\", \"[default-group]:LINKTIVITY\")\n    req.Header.Set(\"api-key-id\", \"VJgSBDVXXXXXXXXX\")\n    req.Header.Set(\"timestamp\", timestamp)\n    req.Header.Set(\"signature-key\", sig)\n\n    resp, err := http.DefaultClient.Do(req)\n    if err != nil {\n        panic(err)\n    }\n    defer resp.Body.Close()\n    body, _ := io.ReadAll(resp.Body)\n    fmt.Println(string(body))\n}\n```\n\n**Python**\n\n```python\nimport base64\nimport hashlib\nimport hmac\nimport time\nimport urllib.request\n\nAPI_KEY = \"YOUR_API_KEY\"\nHOST    = \"open-agent.gds-neo.link-dev.link\"\nPATH    = \"/v1/activity/search-activities\"\n\n\ndef signature_key(api_key: str, timestamp: str, host: str, path: str) -> str:\n    \"\"\"Compute the `signature-key` header value for a GDS API request.\"\"\"\n    def hmac_sha256(key: bytes, msg: bytes) -> bytes:\n        return hmac.new(key, msg, hashlib.sha256).digest()\n\n    k1 = hmac_sha256(b\"congaree\" + api_key.encode(), timestamp.encode())\n    k2 = hmac_sha256(k1, host.encode())\n    k3 = hmac_sha256(k2, path.encode())\n    k  = hmac_sha256(k3, b\"veltra\")\n    # Keep the \"=\" padding; the server requires it.\n    return base64.urlsafe_b64encode(k).decode()\n\n\ndef main():\n    timestamp = time.strftime(\"%Y%m%dT%H%M%SZ\", time.gmtime())\n    sig = signature_key(API_KEY, timestamp, HOST, PATH)\n\n    req = urllib.request.Request(\n        f\"https://{HOST}{PATH}?page_size=20\",\n        headers={\n            \"ota-id\":        \"LINKTIVITY\",\n            \"group-id\":      \"[default-group]:LINKTIVITY\",\n            \"api-key-id\":    \"VJgSBDVXXXXXXXXX\",\n            \"timestamp\":     timestamp,\n            \"signature-key\": sig,\n        },\n    )\n    with urllib.request.urlopen(req) as resp:\n        print(resp.read().decode())\n\n\nif __name__ == \"__main__\":\n    main()\n```\n\n**Java**\n\n```java\nimport java.net.URI;\nimport java.net.http.HttpClient;\nimport java.net.http.HttpRequest;\nimport java.net.http.HttpResponse;\nimport java.nio.charset.StandardCharsets;\nimport java.time.Instant;\nimport java.time.ZoneOffset;\nimport java.time.format.DateTimeFormatter;\nimport java.util.Base64;\nimport javax.crypto.Mac;\nimport javax.crypto.spec.SecretKeySpec;\n\npublic class SignatureExample {\n    private static final String API_KEY = \"YOUR_API_KEY\";\n    private static final String HOST    = \"open-agent.gds-neo.link-dev.link\";\n    private static final String PATH    = \"/v1/activity/search-activities\";\n\n    /** Compute the `signature-key` header value for a GDS API request. */\n    static String signatureKey(String apiKey, String timestamp, String host, String path) throws Exception {\n        byte[] k1 = hmacSha256((\"congaree\" + apiKey).getBytes(StandardCharsets.UTF_8), timestamp.getBytes(StandardCharsets.UTF_8));\n        byte[] k2 = hmacSha256(k1, host.getBytes(StandardCharsets.UTF_8));\n        byte[] k3 = hmacSha256(k2, path.getBytes(StandardCharsets.UTF_8));\n        byte[] k  = hmacSha256(k3, \"veltra\".getBytes(StandardCharsets.UTF_8));\n        // Keep the \"=\" padding; the server requires it.\n        return Base64.getUrlEncoder().encodeToString(k);\n    }\n\n    private static byte[] hmacSha256(byte[] key, byte[] msg) throws Exception {\n        Mac mac = Mac.getInstance(\"HmacSHA256\");\n        mac.init(new SecretKeySpec(key, \"HmacSHA256\"));\n        return mac.doFinal(msg);\n    }\n\n    public static void main(String[] args) throws Exception {\n        String timestamp = DateTimeFormatter.ofPattern(\"yyyyMMdd'T'HHmmss'Z'\").withZone(ZoneOffset.UTC).format(Instant.now());\n        String sig = signatureKey(API_KEY, timestamp, HOST, PATH);\n\n        HttpRequest req = HttpRequest.newBuilder()\n            .uri(URI.create(\"https://\" + HOST + PATH + \"?page_size=20\"))\n            .header(\"ota-id\", \"LINKTIVITY\")\n            .header(\"group-id\", \"[default-group]:LINKTIVITY\")\n            .header(\"api-key-id\", \"VJgSBDVXXXXXXXXX\")\n            .header(\"timestamp\", timestamp)\n            .header(\"signature-key\", sig)\n            .GET()\n            .build();\n\n        HttpResponse<String> resp = HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());\n        System.out.println(resp.body());\n    }\n}\n```\n\n**PHP**\n\n```php\n<?php\n$apiKey = 'YOUR_API_KEY';\n$host   = 'open-agent.gds-neo.link-dev.link';\n$path   = '/v1/activity/search-activities';\n\n/**\n * Compute the `signature-key` header value for a GDS API request.\n */\nfunction signatureKey(string $apiKey, string $timestamp, string $host, string $path): string {\n    $hmacSha256 = fn($key, $msg) => hash_hmac('sha256', $msg, $key, true);\n\n    $k1 = $hmacSha256('congaree' . $apiKey, $timestamp);\n    $k2 = $hmacSha256($k1, $host);\n    $k3 = $hmacSha256($k2, $path);\n    $k  = $hmacSha256($k3, 'veltra');\n\n    // URL-safe base64; keep the \"=\" padding (server requires it).\n    return strtr(base64_encode($k), '+/', '-_');\n}\n\n$timestamp = gmdate('Ymd\\THis\\Z');\n$sig = signatureKey($apiKey, $timestamp, $host, $path);\n\n$ch = curl_init(\"https://{$host}{$path}?page_size=20\");\ncurl_setopt($ch, CURLOPT_HTTPHEADER, [\n    \"ota-id: LINKTIVITY\",\n    \"group-id: [default-group]:LINKTIVITY\",\n    \"api-key-id: VJgSBDVXXXXXXXXX\",\n    \"timestamp: {$timestamp}\",\n    \"signature-key: {$sig}\",\n]);\ncurl_setopt($ch, CURLOPT_RETURNTRANSFER, true);\necho curl_exec($ch);\ncurl_close($ch);\n```\n\n### End-to-end curl example\n\nA canonical request with all 5 headers filled in:\n\n```bash\ncurl https://open-agent.gds-neo.link-dev.link/v1/activity/search-activities?page_size=20 \\\n  --header 'ota-id: LINKTIVITY' \\\n  --header 'group-id: [default-group]:LINKTIVITY' \\\n  --header 'api-key-id: VJgSBDVxxxxxxxxx' \\\n  --header 'timestamp: 20260521T063324Z' \\\n  --header 'signature-key: 3gjtSDLmvsr4M6RdQ9vY5sYPZ1Y7iV...='\n```\n\n### Common errors\n\n| HTTP | Cause |\n| --- | --- |\n| `401 invalid api-key-id` | `api-key-id` header missing or unknown |\n| `401 invalid signature` | HMAC mismatch — check `host` / `path` exactly match the request line, and `timestamp` is the same string in header and HMAC input |\n| `401 timestamp out of range` | Server clock differs from `timestamp` by more than ±5 minutes; sync your clock to NTP |\n\n# Recommended Reservation Flow\n[![Recommended flow to make bookings](https://mermaid.ink/img/pako:eNqNk0Fv2kAQhf_KaA_tJT70iqpIxBiEgozUuJVajKrBO8CI9S5dzxIRxH_vGgK12iSNT9bqvW_mPa8PqnKaVE8tjXus1ugFikFpIT79Wd9CaMgDWyGrQRxsg4-ihj4v_O3SeUALuEM2uDAEGoXAXU54YVj2UKGJXvRzSBJ4ZFmDpoY9afgV0Eor-XB2Jskt3B1KlaIxMBnn98X427j43o5akSTPczhSmZqEreYd64CmVMfzwnftiOn9CZS-DGokJkwWzm3Yrq7GtGPMorHADQHC1lOCQdbO8xMKO3tJ3ZbysYEqpmCJCb2-orIOavjyDku2aPiJ_llj2PGO_qxR4VaCp3cMH3UAg2mezUr1EKqKmqY1n1Zpm3yem2iSWGkDLXXnQrUmX6p5p8t8dK4kH_wcfpoN--PJ1y_ZvNNZ5n30vqrJ_gcZvgNy0hRckwtyrrUT9i3434J0mhf9tIilpM4KVgITthuJt0j2Mbe6UTX5GlnHv-HQIkola6qpVL34qmmJwUipSnuM0ngv3MPeVqonPtCNCtv2Dg8YVx5r1Vuiaa6nWfxQzl-UW7Q_nLtojr8BUdgXWw?type=png)](https://mermaid.live/edit#pako:eNqNk0Fv2kAQhf_KaA_tJT70iqpIxBiEgozUuJVajKrBO8CI9S5dzxIRxH_vGgK12iSNT9bqvW_mPa8PqnKaVE8tjXus1ugFikFpIT79Wd9CaMgDWyGrQRxsg4-ihj4v_O3SeUALuEM2uDAEGoXAXU54YVj2UKGJXvRzSBJ4ZFmDpoY9afgV0Eor-XB2Jskt3B1KlaIxMBnn98X427j43o5akSTPczhSmZqEreYd64CmVMfzwnftiOn9CZS-DGokJkwWzm3Yrq7GtGPMorHADQHC1lOCQdbO8xMKO3tJ3ZbysYEqpmCJCb2-orIOavjyDku2aPiJ_llj2PGO_qxR4VaCp3cMH3UAg2mezUr1EKqKmqY1n1Zpm3yem2iSWGkDLXXnQrUmX6p5p8t8dK4kH_wcfpoN--PJ1y_ZvNNZ5n30vqrJ_gcZvgNy0hRckwtyrrUT9i3434J0mhf9tIilpM4KVgITthuJt0j2Mbe6UTX5GlnHv-HQIkola6qpVL34qmmJwUipSnuM0ngv3MPeVqonPtCNCtv2Dg8YVx5r1Vuiaa6nWfxQzl-UW7Q_nLtojr8BUdgXWw)\n\n",
+    "description": "# Introduction\nThe GDS API are interfaces to allow you to access our system using your OTA account. We provide a number of functions divided into these categories:\n\n  - [Partner](#tag/Partner) - Get a list of suppliers and OTAs. \n  - [Activity](#tag/Activity) - Search activities and get detailed activity information. \n  - [Availability](#tag/Availability) - Get availability calendar and check availability for a request date.\n  - [Booking](#tag/Booking) - Create, modify, cancel a booking.\n\n> Using an AI coding agent to integrate? Install the [GDS API agent skill](https://github.com/linktivity/gds-neo-agent-skill) for signature debugging, endpoint reference, and booking-flow guidance grounded in this spec.\n\n# Authentication\nThe GDS API uses API Key Authentication. This request authentication method require 5 custom headers:\n  - `timestamp`\n  - `ota-id`\n  - `group-id`\n  - `api-key-id`\n  - `signature-key`\n\n## Signature Algorithm\n\n`signature-key` is a chained **HMAC-SHA256** over your secret API key, the request `timestamp`, the request `host`, and the request `path`, finalised with a fixed salt, then base64-url encoded (with `=` padding).\n\n```\nk1 = HMAC-SHA256( key = \"congaree\" + apiKeySecret, msg = timestamp )\nk2 = HMAC-SHA256( key = k1,                         msg = host      )\nk3 = HMAC-SHA256( key = k2,                         msg = path      )\nk  = HMAC-SHA256( key = k3,                         msg = \"veltra\"  )\nsignatureKey = base64url(k)        # keep '=' padding\n```\n\nInputs:\n\n| Name | Source |\n| --- | --- |\n| `apiKeySecret` | The secret paired with your `api-key-id` (out-of-band issued) |\n| `timestamp` | Same value as the `timestamp` header, e.g. `20260521T063324Z` |\n| `host` | Request host, e.g. `open-agent.gds-neo.link-dev.link` |\n| `path` | Request path only, e.g. `/v1/activity/search-activities` (no query string, no fragment) |\n\n### Reference implementation\n\n```go\nfunc signatureKey(apiKeySecret, timestamp, host, path string) string {\n    h := func(key, msg []byte) []byte {\n        m := hmac.New(sha256.New, key)\n        m.Write(msg)\n        return m.Sum(nil)\n    }\n    k1 := h([]byte(\"congaree\"+apiKeySecret), []byte(timestamp))\n    k2 := h(k1, []byte(host))\n    k3 := h(k2, []byte(path))\n    k  := h(k3, []byte(\"veltra\"))\n    return base64.URLEncoding.EncodeToString(k)\n}\n```\n\n## Client snippets\n\nSelf-contained, runnable examples in several languages.\n\n**JavaScript (Postman pre-request)**\n\n```js\n// Postman pre-request script.\n// Sets the `timestamp` and `signature-key` headers for GDS API requests.\n\nconst apiKey = \"YOUR_API_KEY\";\n\n// Resolve Postman variables; strip any scheme from host, normalize path.\nconst host = pm.variables.replaceIn(pm.request.url.getHost()).replace(/^https?:\\/\\//i, \"\");\nconst path = pm.variables.replaceIn(\"/\" + pm.request.url.getPath()).replace(/\\/+/g, \"/\");\n\n// UTC timestamp in YYYYMMDDTHHMMSSZ format.\nconst timestamp = new Date().toISOString().replace(/[-:]|\\.\\d+/g, \"\");\n\n// Chained HMAC-SHA256.\nconst hmac = (key, msg) => CryptoJS.HmacSHA256(msg, key);\nconst k1 = hmac(\"congaree\" + apiKey, timestamp);\nconst k2 = hmac(k1, host);\nconst k3 = hmac(k2, path);\nconst k  = hmac(k3, \"veltra\");\n\n// Base64 URL-safe encoding. Keep the \"=\" padding; the server requires it.\nconst signature = CryptoJS.enc.Base64.stringify(k)\n    .replace(/\\+/g, \"-\")\n    .replace(/\\//g, \"_\");\n\npm.request.headers.upsert({ key: \"timestamp\",     value: timestamp });\npm.request.headers.upsert({ key: \"signature-key\", value: signature });\n```\n\n**Go**\n\n```go\npackage main\n\nimport (\n    \"crypto/hmac\"\n    \"crypto/sha256\"\n    \"encoding/base64\"\n    \"fmt\"\n    \"io\"\n    \"net/http\"\n    \"time\"\n)\n\n// Compute the `signature-key` header value for a GDS API request.\n// The algorithm chains HMAC-SHA256 four times, then base64-URL encodes the result.\nfunc signatureKey(apiKey, timestamp, host, path string) string {\n    hmacSHA256 := func(key, msg []byte) []byte {\n        h := hmac.New(sha256.New, key)\n        h.Write(msg)\n        return h.Sum(nil)\n    }\n    k1 := hmacSHA256([]byte(\"congaree\"+apiKey), []byte(timestamp))\n    k2 := hmacSHA256(k1, []byte(host))\n    k3 := hmacSHA256(k2, []byte(path))\n    k  := hmacSHA256(k3, []byte(\"veltra\"))\n    // Keep the \"=\" padding; the server requires it.\n    return base64.URLEncoding.EncodeToString(k)\n}\n\nfunc main() {\n    const (\n        apiKey = \"YOUR_API_KEY\"\n        host   = \"open-agent.gds-neo.link-dev.link\"\n        path   = \"/v1/activity/search-activities\"\n    )\n    timestamp := time.Now().UTC().Format(\"20060102T150405Z\")\n    sig := signatureKey(apiKey, timestamp, host, path)\n\n    req, _ := http.NewRequest(\"GET\", \"https://\"+host+path+\"?page_size=20\", nil)\n    req.Header.Set(\"ota-id\", \"LINKTIVITY\")\n    req.Header.Set(\"group-id\", \"[default-group]:LINKTIVITY\")\n    req.Header.Set(\"api-key-id\", \"VJgSBDVXXXXXXXXX\")\n    req.Header.Set(\"timestamp\", timestamp)\n    req.Header.Set(\"signature-key\", sig)\n\n    resp, err := http.DefaultClient.Do(req)\n    if err != nil {\n        panic(err)\n    }\n    defer resp.Body.Close()\n    body, _ := io.ReadAll(resp.Body)\n    fmt.Println(string(body))\n}\n```\n\n**Python**\n\n```python\nimport base64\nimport hashlib\nimport hmac\nimport time\nimport urllib.request\n\nAPI_KEY = \"YOUR_API_KEY\"\nHOST    = \"open-agent.gds-neo.link-dev.link\"\nPATH    = \"/v1/activity/search-activities\"\n\n\ndef signature_key(api_key: str, timestamp: str, host: str, path: str) -> str:\n    \"\"\"Compute the `signature-key` header value for a GDS API request.\"\"\"\n    def hmac_sha256(key: bytes, msg: bytes) -> bytes:\n        return hmac.new(key, msg, hashlib.sha256).digest()\n\n    k1 = hmac_sha256(b\"congaree\" + api_key.encode(), timestamp.encode())\n    k2 = hmac_sha256(k1, host.encode())\n    k3 = hmac_sha256(k2, path.encode())\n    k  = hmac_sha256(k3, b\"veltra\")\n    # Keep the \"=\" padding; the server requires it.\n    return base64.urlsafe_b64encode(k).decode()\n\n\ndef main():\n    timestamp = time.strftime(\"%Y%m%dT%H%M%SZ\", time.gmtime())\n    sig = signature_key(API_KEY, timestamp, HOST, PATH)\n\n    req = urllib.request.Request(\n        f\"https://{HOST}{PATH}?page_size=20\",\n        headers={\n            \"ota-id\":        \"LINKTIVITY\",\n            \"group-id\":      \"[default-group]:LINKTIVITY\",\n            \"api-key-id\":    \"VJgSBDVXXXXXXXXX\",\n            \"timestamp\":     timestamp,\n            \"signature-key\": sig,\n        },\n    )\n    with urllib.request.urlopen(req) as resp:\n        print(resp.read().decode())\n\n\nif __name__ == \"__main__\":\n    main()\n```\n\n**Java**\n\n```java\nimport java.net.URI;\nimport java.net.http.HttpClient;\nimport java.net.http.HttpRequest;\nimport java.net.http.HttpResponse;\nimport java.nio.charset.StandardCharsets;\nimport java.time.Instant;\nimport java.time.ZoneOffset;\nimport java.time.format.DateTimeFormatter;\nimport java.util.Base64;\nimport javax.crypto.Mac;\nimport javax.crypto.spec.SecretKeySpec;\n\npublic class SignatureExample {\n    private static final String API_KEY = \"YOUR_API_KEY\";\n    private static final String HOST    = \"open-agent.gds-neo.link-dev.link\";\n    private static final String PATH    = \"/v1/activity/search-activities\";\n\n    /** Compute the `signature-key` header value for a GDS API request. */\n    static String signatureKey(String apiKey, String timestamp, String host, String path) throws Exception {\n        byte[] k1 = hmacSha256((\"congaree\" + apiKey).getBytes(StandardCharsets.UTF_8), timestamp.getBytes(StandardCharsets.UTF_8));\n        byte[] k2 = hmacSha256(k1, host.getBytes(StandardCharsets.UTF_8));\n        byte[] k3 = hmacSha256(k2, path.getBytes(StandardCharsets.UTF_8));\n        byte[] k  = hmacSha256(k3, \"veltra\".getBytes(StandardCharsets.UTF_8));\n        // Keep the \"=\" padding; the server requires it.\n        return Base64.getUrlEncoder().encodeToString(k);\n    }\n\n    private static byte[] hmacSha256(byte[] key, byte[] msg) throws Exception {\n        Mac mac = Mac.getInstance(\"HmacSHA256\");\n        mac.init(new SecretKeySpec(key, \"HmacSHA256\"));\n        return mac.doFinal(msg);\n    }\n\n    public static void main(String[] args) throws Exception {\n        String timestamp = DateTimeFormatter.ofPattern(\"yyyyMMdd'T'HHmmss'Z'\").withZone(ZoneOffset.UTC).format(Instant.now());\n        String sig = signatureKey(API_KEY, timestamp, HOST, PATH);\n\n        HttpRequest req = HttpRequest.newBuilder()\n            .uri(URI.create(\"https://\" + HOST + PATH + \"?page_size=20\"))\n            .header(\"ota-id\", \"LINKTIVITY\")\n            .header(\"group-id\", \"[default-group]:LINKTIVITY\")\n            .header(\"api-key-id\", \"VJgSBDVXXXXXXXXX\")\n            .header(\"timestamp\", timestamp)\n            .header(\"signature-key\", sig)\n            .GET()\n            .build();\n\n        HttpResponse<String> resp = HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());\n        System.out.println(resp.body());\n    }\n}\n```\n\n**PHP**\n\n```php\n<?php\n$apiKey = 'YOUR_API_KEY';\n$host   = 'open-agent.gds-neo.link-dev.link';\n$path   = '/v1/activity/search-activities';\n\n/**\n * Compute the `signature-key` header value for a GDS API request.\n */\nfunction signatureKey(string $apiKey, string $timestamp, string $host, string $path): string {\n    $hmacSha256 = fn($key, $msg) => hash_hmac('sha256', $msg, $key, true);\n\n    $k1 = $hmacSha256('congaree' . $apiKey, $timestamp);\n    $k2 = $hmacSha256($k1, $host);\n    $k3 = $hmacSha256($k2, $path);\n    $k  = $hmacSha256($k3, 'veltra');\n\n    // URL-safe base64; keep the \"=\" padding (server requires it).\n    return strtr(base64_encode($k), '+/', '-_');\n}\n\n$timestamp = gmdate('Ymd\\THis\\Z');\n$sig = signatureKey($apiKey, $timestamp, $host, $path);\n\n$ch = curl_init(\"https://{$host}{$path}?page_size=20\");\ncurl_setopt($ch, CURLOPT_HTTPHEADER, [\n    \"ota-id: LINKTIVITY\",\n    \"group-id: [default-group]:LINKTIVITY\",\n    \"api-key-id: VJgSBDVXXXXXXXXX\",\n    \"timestamp: {$timestamp}\",\n    \"signature-key: {$sig}\",\n]);\ncurl_setopt($ch, CURLOPT_RETURNTRANSFER, true);\necho curl_exec($ch);\ncurl_close($ch);\n```\n\n### End-to-end curl example\n\nA canonical request with all 5 headers filled in:\n\n```bash\ncurl https://open-agent.gds-neo.link-dev.link/v1/activity/search-activities?page_size=20 \\\n  --header 'ota-id: LINKTIVITY' \\\n  --header 'group-id: [default-group]:LINKTIVITY' \\\n  --header 'api-key-id: VJgSBDVxxxxxxxxx' \\\n  --header 'timestamp: 20260521T063324Z' \\\n  --header 'signature-key: 3gjtSDLmvsr4M6RdQ9vY5sYPZ1Y7iV...='\n```\n\n### Common errors\n\n| HTTP | Cause |\n| --- | --- |\n| `401 invalid api-key-id` | `api-key-id` header missing or unknown |\n| `401 invalid signature` | HMAC mismatch — check `host` / `path` exactly match the request line, and `timestamp` is the same string in header and HMAC input |\n| `401 timestamp out of range` | Server clock differs from `timestamp` by more than ±5 minutes; sync your clock to NTP |\n\n# Errors\nA failed request returns an HTTP status derived from a gRPC status code, with this JSON body:\n\n```json\n{\n  \"code\": 9,\n  \"error_code\": \"BOOKING_ADAPTER_BOOKING_NO_AVAILABILITY\",\n  \"message\": \"booking adapter error\",\n  \"details\": [\n    {\n      \"metadata\": {\n        \"booking_adapter_error_code\": \"2004\",\n        \"request_id\": \"e9c30653-eafa-4169-a08e-9e28748adb69\"\n      }\n    }\n  ],\n  \"retryable\": false\n}\n```\n\n| Field | Meaning |\n| --- | --- |\n| `code` | The numeric gRPC status code. The HTTP status derives from it, except that a request using an HTTP method the path does not accept gets HTTP 405 with `code` 12. |\n| `error_code` | The machine-readable error code; never empty. A business code from the table below when one applies, otherwise the name of the gRPC status code (`INVALID_ARGUMENT`, `NOT_FOUND`, `INTERNAL`, ...). Branch on this field. New values may be added at any time: handle a value you do not know by its `code`. |\n| `message` | English text for logs and support tickets. Its wording may change between releases; do not parse it. 4xx responses, and 5xx responses with a business `error_code`, carry text written for the error; any other 5xx carries only the HTTP status text (for example `Internal Server Error`), so quote `request_id` when you contact support. |\n| `details[].metadata` | Context for the error, such as `request_id` and details of the error. |\n| `retryable` | `true`: the same request may be resent as is, after a short wait. `false`: do not resend it as is; act on `error_code`. |\n\nRequests rejected by the authentication check at the HTTP edge are the one exception to this shape: they return `{\"message\": \"...\"}` only.\n\ngRPC status codes. When no business code applies, `error_code` is the name of the gRPC status code and `code` its number:\n\n| error_code | code | HTTP | Meaning | retryable |\n| --- | --- | --- | --- | --- |\n| <a id=\"err-INVALID_ARGUMENT\"></a>`INVALID_ARGUMENT` | 3 | 400 | The request is invalid regardless of system state: the body is not valid JSON, or a field fails validation without a more specific code. | false |\n| <a id=\"err-DEADLINE_EXCEEDED\"></a>`DEADLINE_EXCEEDED` | 4 | 504 | The request passed the 30 second server limit. The outcome is unknown: read the endpoint's description for how to find out. | true |\n| <a id=\"err-NOT_FOUND\"></a>`NOT_FOUND` | 5 | 404 | The requested entity does not exist and no more specific code applies. | false |\n| <a id=\"err-PERMISSION_DENIED\"></a>`PERMISSION_DENIED` | 7 | 403 | The entity exists but belongs to another OTA or OTA group. | false |\n| <a id=\"err-RESOURCE_EXHAUSTED\"></a>`RESOURCE_EXHAUSTED` | 8 | 429 | A quota or rate limit was exceeded. Resend with backoff. | true |\n| <a id=\"err-FAILED_PRECONDITION\"></a>`FAILED_PRECONDITION` | 9 | 400 | The system is not in the state the operation requires and no more specific code applies; the endpoint's description names the cases. | false |\n| <a id=\"err-ABORTED\"></a>`ABORTED` | 10 | 409 | Another request is operating on the same entity (a booking session, a booking, or its bundle). Resend after a few seconds. | true |\n| <a id=\"err-UNIMPLEMENTED\"></a>`UNIMPLEMENTED` | 12 | 405 | The path does not accept the HTTP method used. | false |\n| <a id=\"err-INTERNAL\"></a>`INTERNAL` | 13 | 500 | Internal error. `message` is `Internal Server Error`; quote `request_id` when you contact support. | false |\n| <a id=\"err-UNAVAILABLE\"></a>`UNAVAILABLE` | 14 | 503 | A service the request depends on is unreachable. `message` is `Service Unavailable`. | true |\n| <a id=\"err-UNAUTHENTICATED\"></a>`UNAUTHENTICATED` | 16 | 401 | An authentication header is missing, the signature does not match, or `timestamp` is out of range. See **Authentication**. | false |\n\nBusiness error codes, by category:\n\n**Common errors**\n\nCan be returned by any endpoint.\n\n| error_code | HTTP | Meaning | metadata |\n| --- | --- | --- | --- |\n| <a id=\"err-VALIDATION_FAILED\"></a>`VALIDATION_FAILED` | 400 | A request field failed validation. One `details` entry per field. | `field`, `constraint` |\n\n**Booking errors**\n\n| error_code | HTTP | Meaning | metadata |\n| --- | --- | --- | --- |\n| <a id=\"err-BOOKING_REQUIRED_INFO_MISSING\"></a>`BOOKING_REQUIRED_INFO_MISSING` | 400 | StartBooking: a required participant or booking field is missing or malformed. One `details` entry per field. | `field`, `constraint` |\n| <a id=\"err-BOOKING_INVALID_FORM_RESPONSE\"></a>`BOOKING_INVALID_FORM_RESPONSE` | 400 | StartBooking: a custom reservation form response is missing or invalid. One `details` entry per response. | `field`, `constraint` |\n| <a id=\"err-BOOKING_NOT_FOUND\"></a>`BOOKING_NOT_FOUND` | 404 | StartCancelBooking, FinalCancelBooking: no booking matches `booking_id`. | `booking_id` |\n| <a id=\"err-BOOKING_ALREADY_CANCELLED\"></a>`BOOKING_ALREADY_CANCELLED` | 400 | StartCancelBooking, FinalCancelBooking: the booking is already cancelled. Treat it as settled. | `booking_id` |\n| <a id=\"err-CANCEL_DEADLINE_PASSED\"></a>`CANCEL_DEADLINE_PASSED` | 400 | StartCancelBooking, FinalCancelBooking: the voucher expiration time has passed. | `booking_id`, `deadline` |\n| <a id=\"err-BOOKING_ALREADY_ISSUED\"></a>`BOOKING_ALREADY_ISSUED` | 400 | StartCancelBooking, FinalCancelBooking: the voucher is redeemed in full or in part. | `booking_id` |\n| <a id=\"err-BOOKING_NOT_CANCELLABLE\"></a>`BOOKING_NOT_CANCELLABLE` | 400 | StartCancelBooking, FinalCancelBooking: the booking status, the cancellation policy in effect, a bulk or bundle constraint, or one child of the bundle forbids cancellation. `message` tells the cases apart. | `booking_id` (for a bundle, the child that blocks the cancellation) |\n| <a id=\"err-CANCEL_NOT_STARTED\"></a>`CANCEL_NOT_STARTED` | 400 | FinalCancelBooking: the booking has no open cancellation request. Call StartCancelBooking first. | `booking_id` |\n| <a id=\"err-CANCEL_REFUND_CHANGED\"></a>`CANCEL_REFUND_CHANGED` | 400 | FinalCancelBooking: the refund amounts changed since StartCancelBooking, so that request is voided. Call StartCancelBooking again to get the current amounts. | `booking_id` |\n\n**Finance errors**\n\n| error_code | HTTP | Meaning | metadata |\n| --- | --- | --- | --- |\n| <a id=\"err-INSUFFICIENT_BALANCE\"></a>`INSUFFICIENT_BALANCE` | 400 | StartBooking, or FinalBooking before the booking is placed with the supplier: the wallet balance does not cover the booking. Nothing is booked: top up, then call StartBooking again, or resend FinalBooking with the same booking session. `retryable` is `false`. | |\n| `INSUFFICIENT_BALANCE` | 503 | FinalBooking, after the booking is placed with the supplier: the wallet balance is insufficient. The booking is held, not failed: top up, then resend FinalBooking with the same booking session. Do not create a new booking. `retryable` is `true`. | |\n\n**Supplier errors**\n\nReturned when the supplier system behind the booking rejects or fails the operation.\n\n| error_code | HTTP | Meaning | metadata |\n| --- | --- | --- | --- |\n| <a id=\"err-BOOKING_ADAPTER_INVALID_ARGUMENT\"></a>`BOOKING_ADAPTER_INVALID_ARGUMENT` | 400 | The supplier rejected a request parameter. | |\n| <a id=\"err-BOOKING_ADAPTER_ARGUMENT_MISSING\"></a>`BOOKING_ADAPTER_ARGUMENT_MISSING` | 400 | A parameter the supplier requires is missing. | `field` (when known) |\n| <a id=\"err-BOOKING_ADAPTER_INTERNAL\"></a>`BOOKING_ADAPTER_INTERNAL` | 500 | The supplier connection failed in a way it could not classify. The outcome is unknown: do not assume the supplier did not act. | |\n| <a id=\"err-BOOKING_ADAPTER_UNIMPLEMENTED\"></a>`BOOKING_ADAPTER_UNIMPLEMENTED` | 501 | The operation is not supported for this supplier. | |\n| <a id=\"err-BOOKING_ADAPTER_EXTERNAL_PENDING\"></a>`BOOKING_ADAPTER_EXTERNAL_PENDING` | 503 | The supplier is still processing the operation. Do not treat it as failed; resend later. `retryable` is `true`. | |\n| <a id=\"err-BOOKING_ADAPTER_EXTERNAL_FAILED\"></a>`BOOKING_ADAPTER_EXTERNAL_FAILED` | 400 | The supplier rejected the operation. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_NOT_ENOUGH_ALLOTMENT\"></a>`BOOKING_ADAPTER_BOOKING_NOT_ENOUGH_ALLOTMENT` | 400 | The supplier does not have enough stock for the requested quantity. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_NO_AVAILABILITY\"></a>`BOOKING_ADAPTER_BOOKING_NO_AVAILABILITY` | 400 | The supplier has no availability for the requested date or session. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_CAPACITY_CONSTRAINT\"></a>`BOOKING_ADAPTER_BOOKING_CAPACITY_CONSTRAINT` | 400 | The supplier rejected the ordered quantity. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_DEADLINE_PASSED\"></a>`BOOKING_ADAPTER_BOOKING_DEADLINE_PASSED` | 400 | The supplier's booking or cancellation deadline has passed. | |\n| <a id=\"err-BOOKING_ADAPTER_EXTERNAL_OUT_OF_SERVICE\"></a>`BOOKING_ADAPTER_EXTERNAL_OUT_OF_SERVICE` | 503 | The supplier system is under maintenance. Resend later. `retryable` is `true`. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_NOT_FOUND\"></a>`BOOKING_ADAPTER_BOOKING_NOT_FOUND` | 404 | The supplier does not know the booking. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_NOT_CANCELLABLE\"></a>`BOOKING_ADAPTER_BOOKING_NOT_CANCELLABLE` | 400 | The supplier refuses to cancel the booking. | |\n\nFor every `BOOKING_ADAPTER_*` code, `message` is the fixed text `booking adapter error`: the supplier's own wording is not returned, so tell the cases apart by `error_code`. These responses also carry `booking_adapter_error_code`, a legacy number kept for existing integrations. It will be removed; branch on `error_code` instead.\n\n# Recommended Reservation Flow\n[![Recommended flow to make bookings](https://mermaid.ink/img/pako:eNqNk0Fv2kAQhf_KaA_tJT70iqpIxBiEgozUuJVajKrBO8CI9S5dzxIRxH_vGgK12iSNT9bqvW_mPa8PqnKaVE8tjXus1ugFikFpIT79Wd9CaMgDWyGrQRxsg4-ihj4v_O3SeUALuEM2uDAEGoXAXU54YVj2UKGJXvRzSBJ4ZFmDpoY9afgV0Eor-XB2Jskt3B1KlaIxMBnn98X427j43o5akSTPczhSmZqEreYd64CmVMfzwnftiOn9CZS-DGokJkwWzm3Yrq7GtGPMorHADQHC1lOCQdbO8xMKO3tJ3ZbysYEqpmCJCb2-orIOavjyDku2aPiJ_llj2PGO_qxR4VaCp3cMH3UAg2mezUr1EKqKmqY1n1Zpm3yem2iSWGkDLXXnQrUmX6p5p8t8dK4kH_wcfpoN--PJ1y_ZvNNZ5n30vqrJ_gcZvgNy0hRckwtyrrUT9i3434J0mhf9tIilpM4KVgITthuJt0j2Mbe6UTX5GlnHv-HQIkola6qpVL34qmmJwUipSnuM0ngv3MPeVqonPtCNCtv2Dg8YVx5r1Vuiaa6nWfxQzl-UW7Q_nLtojr8BUdgXWw?type=png)](https://mermaid.live/edit#pako:eNqNk0Fv2kAQhf_KaA_tJT70iqpIxBiEgozUuJVajKrBO8CI9S5dzxIRxH_vGgK12iSNT9bqvW_mPa8PqnKaVE8tjXus1ugFikFpIT79Wd9CaMgDWyGrQRxsg4-ihj4v_O3SeUALuEM2uDAEGoXAXU54YVj2UKGJXvRzSBJ4ZFmDpoY9afgV0Eor-XB2Jskt3B1KlaIxMBnn98X427j43o5akSTPczhSmZqEreYd64CmVMfzwnftiOn9CZS-DGokJkwWzm3Yrq7GtGPMorHADQHC1lOCQdbO8xMKO3tJ3ZbysYEqpmCJCb2-orIOavjyDku2aPiJ_llj2PGO_qxR4VaCp3cMH3UAg2mezUr1EKqKmqY1n1Zpm3yem2iSWGkDLXXnQrUmX6p5p8t8dK4kH_wcfpoN--PJ1y_ZvNNZ5n30vqrJ_gcZvgNy0hRckwtyrrUT9i3434J0mhf9tIilpM4KVgITthuJt0j2Mbe6UTX5GlnHv-HQIkola6qpVL34qmmJwUipSnuM0ngv3MPeVqonPtCNCtv2Dg8YVx5r1Vuiaa6nWfxQzl-UW7Q_nLtojr8BUdgXWw)\n\n",
     "version": "1.0.{DATE}",
     "contact": {
       "name": "API Support",
@@ -94,13 +94,13 @@
           "4xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           },
           "5xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           }
         },
@@ -124,13 +124,13 @@
           "4xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           },
           "5xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           }
         },
@@ -809,13 +809,13 @@
           "4xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           },
           "5xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           }
         },
@@ -1084,13 +1084,13 @@
           "4xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           },
           "5xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           }
         },
@@ -1373,13 +1373,13 @@
           "4xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           },
           "5xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           }
         },
@@ -1413,13 +1413,13 @@
           "4xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           },
           "5xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           }
         },
@@ -1453,13 +1453,13 @@
           "4xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           },
           "5xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           }
         },
@@ -1483,13 +1483,13 @@
           "4xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           },
           "5xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           }
         },
@@ -1511,7 +1511,7 @@
     "/v1/booking/ota/cancel-reservations": {
       "post": {
         "summary": "1.3b CancelReservations",
-        "description": "Cancel multiple pending reservation sessions in batch.\n\nProvide a list of `session_ids` to cancel. The `session_id` can be obtained from the **[StartBooking]** response or the **[ListReservations]** API. Use it to cancel unneeded reservations to avoid hitting the restriction.",
+        "description": "Cancel multiple pending reservation sessions in batch.\n\nProvide the sessions to cancel in `booking_session_ids`. Each value is the `session_id` returned by **[StartBooking]** or listed by **[ListReservations]**. Use it to cancel unneeded reservations to avoid hitting the restriction.",
         "operationId": "CancelReservations",
         "responses": {
           "200": {
@@ -1524,13 +1524,13 @@
           "4xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           },
           "5xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           }
         },
@@ -1564,13 +1564,13 @@
           "4xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           },
           "5xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           }
         },
@@ -1603,13 +1603,13 @@
           "4xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           },
           "5xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           }
         },
@@ -1624,7 +1624,7 @@
           },
           {
             "name": "page_size",
-            "description": "單頁上限 100：對外訂單列表與內部 book 服務同一個數字。\n為什麼是 100：每筆訂單超過 20KB，100 筆約 2MB，守得住單一回應 4MB 的預算；超過 100 直接回 400，不靜默收斂。\n\nnumber of bookings to return per page. Maximum 100; larger values are rejected with 400.",
+            "description": "number of bookings to return per page. Maximum 100; larger values are rejected with 400.",
             "in": "query",
             "required": false,
             "type": "integer",
@@ -1721,7 +1721,7 @@
     "/v1/booking/ota/update-booking-participant-info": {
       "post": {
         "summary": "3 UpdateBookingParticipantInfo",
-        "description": "Update participant information for a confirmed booking.\n\nProvide booking `id` and updated `participant_info` to modify traveler details.",
+        "description": "Update participant information for a confirmed booking.\n\nProvide `booking_id` and the complete `participant_info`. The request replaces the stored participant information as a whole: any field left out is cleared, so send the full structure rather than only the changed fields (the per-participant `unit_title` is the exception: Link always fills it from the booking). Link then sends the update to the supplier and regenerates the voucher; the response carries the new voucher URLs. Sub-orders of a bulk booking cannot be updated.",
         "operationId": "UpdateBookingParticipantInfo",
         "responses": {
           "200": {
@@ -1733,13 +1733,13 @@
           "4xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           },
           "5xx": {
             "description": "",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           }
         },
@@ -1761,7 +1761,7 @@
     "/v1/booking/ota/start-cancel-booking": {
       "post": {
         "summary": "4.1 StartCancelBooking",
-        "description": "Initiate a cancellation request for a confirmed booking. This is the first step of the cancellation process.\n\nReturns cancellation check info and refund details. Use **[FinalCancelBooking]** to confirm the cancellation.\n\n## Cancellability is reported in the response body\n\nEvery 200 response carries `cancel_check_code`. A booking that cannot be cancelled is reported here, not as an HTTP error:\n\n| cancel_check_code | Meaning |\n| --- | --- |\n| `CAN_BE_CANCELLED` | Cancellation is allowed. `cancel_refund_display` holds the refund breakdown, and a bundle parent also returns one entry per child in `child_cancel_refund_display`. Call FinalCancelBooking next. |\n| `ALREADY_CANCELLED` | The booking is already cancelled. |\n| `BOOKING_EXPIRED` | The voucher expiration time has passed. |\n| `CAN_NOT_CANCEL` | The booking cannot be cancelled for any other reason: the voucher is issued in full or in part, the cancellation policy in effect does not allow cancellation, the booking is a bundle child (cancel the parent instead), or the booking status does not allow cancellation. `cancel_refund_display` is null and no reason is returned. |\n\n`SHOULD_DECLINE_INSTEAD_OF_CANCEL` belongs to supplier-side cancellation and is never returned here.\n\nCalling this endpoint again while a cancellation request is already pending returns that request together with the refund amounts calculated when it was created. Those amounts are the ones FinalCancelBooking applies, so if the cancellation fee changes in between, FinalCancelBooking fails and the flow starts here again.\n\n## Error responses\n\nFailures return an HTTP status mapped from a gRPC status code, with `google.rpc.Status` as the body:\n\n```json\n{\n  \"code\": 5,\n  \"message\": \"booking PRIVATE-20260212-WR2F2VHE not found\",\n  \"details\": [\n    {\n      \"reason\": \"booking PRIVATE-20260212-WR2F2VHE not found\",\n      \"domain\": \"gdsmixer.linktivity.io\",\n      \"metadata\": {\n        \"request_id\": \"e9c30653-eafa-4169-a08e-9e28748adb69\",\n        \"time\": \"2026-02-13T10:05:17+09:00\"\n      }\n    }\n  ]\n}\n```\n\n`code` is the numeric gRPC status code. `message` is English text for logs and support tickets and its wording may change between releases, so branch on the HTTP status and `code` instead of parsing it. Quote `details[0].metadata.request_id` when you report a problem. Requests that fail the header check at the HTTP edge are the one exception to this shape: they return `{\"message\": \"...\"}` with no `code` and no `details`.\n\n| HTTP | code | Cause | Retry |\n| --- | --- | --- | --- |\n| 400 | 3 INVALID_ARGUMENT | The request body is not valid JSON. Unknown fields and unknown enum values are ignored rather than rejected, so they do not produce this error. | No |\n| 400 | 9 FAILED_PRECONDITION | Cancellation cannot be started; see the list below. | No |\n| 401 | 16 UNAUTHENTICATED | An authentication header is missing, or the signature does not match. `timestamp` has to be within 5 minutes of server time. | No |\n| 403 | 7 PERMISSION_DENIED | The booking belongs to another OTA or OTA group. | No |\n| 404 | 5 NOT_FOUND | No booking matches `booking_id`. An empty `booking_id` also lands here. | No |\n| 409 | 10 ABORTED | Another operation on the same booking is still running. A bundle is locked as one unit, so an operation on any booking in it blocks the others. | Yes, after a few seconds |\n| 500 | 13 INTERNAL | Internal error. | Yes |\n| 503 | 14 UNAVAILABLE | A service this call depends on is unreachable. | Yes |\n| 504 | 4 DEADLINE_EXCEEDED | The request passed the 30 second server limit. The cancellation request may or may not have been created; call StartCancelBooking again to find out. | Yes |\n\n400 FAILED_PRECONDITION covers these cases, told apart by `message`:\n\n- `This order cannot be canceled because it is a bulk booking.` Bookings created as part of a bulk booking cannot be cancelled through the API.\n- `cancel pending booking can not resume: ...` A cancellation already in progress cannot be picked up again. Contact support.\n- `A sub-booking has already been canceled by the supplier. ...` One booking in the bundle was cancelled by its supplier, so the bundle can no longer be cancelled as a whole.\n- `Sub-booking {booking_id} has a non-cancellable cancellation policy in effect; ...` One booking in the bundle is under a policy that does not allow cancellation.\n- `Sub-booking {booking_id} is invalidated or being invalidated by the system; ...` One booking in the bundle has been invalidated. Contact support.\n- `booking {id} is no longer cancellable after adapter sync: ...` The booking became non-cancellable while this call was running, usually because the voucher was issued at the supplier.\n- `failed to calculate refund: ...` The refund amounts could not be calculated. Contact support.",
+        "description": "Initiate a cancellation request for a confirmed booking. This is the first step of the cancellation process.\n\nA 200 response means the booking can be cancelled and a cancellation request now exists, or an earlier open request was reused. `cancel_refund_display` holds the refund breakdown, and a bundle parent also returns one entry per child in `child_cancel_refund_display`. Call **[FinalCancelBooking]** next.\n\n`cancel_check_code` is always `CAN_BE_CANCELLED` on a 200 response. The field is deprecated and will be removed in a later version; a booking that cannot be cancelled is reported as an HTTP error with a business `error_code`, never as a 200.\n\nCalling this endpoint again while a cancellation request is already open returns that request together with the refund amounts calculated when it was created. Those amounts are the ones FinalCancelBooking applies, so if the cancellation fee changes in between, FinalCancelBooking fails and the flow starts here again.",
         "operationId": "StartCancelBooking",
         "responses": {
           "200": {
@@ -1771,15 +1771,15 @@
             }
           },
           "4xx": {
-            "description": "",
+            "description": "<div class=\"gds-codes\">\n\n| HTTP STATUS CODE | error_code |\n| --- | --- |\n| 400 | [`INVALID_ARGUMENT`](#err-INVALID_ARGUMENT)<br>[`BOOKING_ALREADY_CANCELLED`](#err-BOOKING_ALREADY_CANCELLED)<br>[`CANCEL_DEADLINE_PASSED`](#err-CANCEL_DEADLINE_PASSED)<br>[`BOOKING_ALREADY_ISSUED`](#err-BOOKING_ALREADY_ISSUED)<br>[`BOOKING_NOT_CANCELLABLE`](#err-BOOKING_NOT_CANCELLABLE)<br>[`FAILED_PRECONDITION`](#err-FAILED_PRECONDITION) |\n| 401 | [`UNAUTHENTICATED`](#err-UNAUTHENTICATED) |\n| 403 | [`PERMISSION_DENIED`](#err-PERMISSION_DENIED) |\n| 404 | [`BOOKING_NOT_FOUND`](#err-BOOKING_NOT_FOUND) |\n| 409 | [`ABORTED`](#err-ABORTED) |\n\n</div>",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           },
           "5xx": {
-            "description": "",
+            "description": "<div class=\"gds-codes\">\n\n| HTTP STATUS CODE | error_code |\n| --- | --- |\n| 500 | [`INTERNAL`](#err-INTERNAL) |\n| 503 | [`UNAVAILABLE`](#err-UNAVAILABLE) |\n| 504 | [`DEADLINE_EXCEEDED`](#err-DEADLINE_EXCEEDED) |\n\n</div>",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           }
         },
@@ -1801,7 +1801,7 @@
     "/v1/booking/ota/final-cancel-booking": {
       "post": {
         "summary": "4.2 FinalCancelBooking",
-        "description": "Finalize a cancellation request for a confirmed booking. This is the second step of the cancellation process.\n\nUse the `booking_id` and specify `cancel_by` to confirm the cancellation. StartCancelBooking must have returned `CAN_BE_CANCELLED` for the booking first, and the refund amounts from that response are the ones applied here.\n\n## The cancellation outcome is reported in the response body\n\nA cancellation the supplier refuses, or has not confirmed yet, comes back as 200. Read `parent_result.status`:\n\n| status | Meaning | What to do |\n| --- | --- | --- |\n| `CANCEL_SUCCEED` | The booking is cancelled. | Nothing. |\n| `CANCEL_PENDING` | The supplier has taken the cancellation but not confirmed it yet; some suppliers handle cancellations by hand. | Call FinalCancelBooking again later to pick up the result. |\n| `CANCEL_FAILED` | The booking is not cancelled. `failed_reason` carries the reason. | Resolve the reason and call again, or contact support. |\n\nFor a bundle parent, every child booking has its own entry in `children_results`, and one child that is not `CANCEL_SUCCEED` turns `parent_result.status` into `CANCEL_FAILED` while the HTTP status stays 200. Read every entry rather than relying on the HTTP status alone. Reasons that apply to a single child, such as a voucher that was issued or has expired, appear in that child's `failed_reason`.\n\n## Error responses\n\nFailures use the same `google.rpc.Status` body as StartCancelBooking, where `code` is the numeric gRPC status code and `message` is English text whose wording may change between releases. 401, 403, 409, 500, 503 and 504 have the same causes as they do there.\n\n| HTTP | code | Cause | Retry |\n| --- | --- | --- | --- |\n| 400 | 3 INVALID_ARGUMENT | The request body is not valid JSON. | No |\n| 400 | 9 FAILED_PRECONDITION | The cancellation cannot be carried out; see the list below. | No |\n| 404 | 5 NOT_FOUND | Either no booking matches `booking_id`, or the booking has no pending cancellation request, which means StartCancelBooking was not called or its request has already been used or voided. `message` says which. | No |\n\n400 FAILED_PRECONDITION covers these cases, told apart by `message`:\n\n- `Please Execute StartCancelBooking First.` The booking is no longer in a cancellable status. This includes a voucher issued after StartCancelBooking returned, a passed voucher expiration time, and a booking already cancelled from another channel. Call StartCancelBooking again to see the current state.\n- `this booking has already been canceled` The cancellation has already gone through.\n- `cancel booking request status can not cancel: FAILED` The pending cancellation request was voided. Start again from StartCancelBooking.\n- `refund changed, please restart cancellation` The refund amounts changed between the two calls, so the amounts confirmed in StartCancelBooking no longer apply. Call StartCancelBooking again to get the current amounts.\n- `booking is not cancellable under the current cancellation policy` The policy in effect does not allow cancellation.\n- `bundle child booking can not be cancelled directly; cancel via the parent booking` Cancel the bundle parent instead.\n- `cancel pending booking can not resume: ...` A cancellation already in progress cannot be picked up again. Contact support.\n- `A sub-booking has already been canceled by the supplier. ...` or `Sub-booking {booking_id} is invalidated or being invalidated by the system; ...` One booking in the bundle is in a state that stops the bundle from being cancelled.\n\nAfter a 500 or a 504, the cancellation may already have reached the supplier. Call FinalCancelBooking again rather than StartCancelBooking: it picks up a cancellation that is in progress instead of cancelling a second time, and returns `CANCEL_PENDING` while the outcome is still open.",
+        "description": "Finalize a cancellation request for a confirmed booking. This is the second step of the cancellation process.\n\nUse the `booking_id` and specify `cancel_by` to confirm the cancellation. StartCancelBooking must have succeeded for the booking first, and the refund amounts from that response are the ones applied here.\n\nA 200 response means the cancellation went through, or the supplier has taken it and is still confirming. Read the top-level `status`:\n\n| status | Meaning | What to do |\n| --- | --- | --- |\n| `CANCEL_SUCCEED` | The booking is cancelled. | Nothing. |\n| `CANCEL_PENDING` | The supplier has taken the cancellation but not confirmed it yet; some suppliers handle cancellations by hand. | Call FinalCancelBooking again later to pick up the result. |\n\nThe top-level `booking_id` and `status` are the fields to read. `parent_result` is still filled for now but is deprecated and will be removed in a later version; `children_results` has been removed, and `CANCEL_FAILED` is never returned in a 200 any more.\n\nA cancellation that did not go through is an HTTP error with a business `error_code`. For a bundle parent, one child that cannot be cancelled or whose cancellation failed makes the whole call fail with that child's error, and `metadata.booking_id` names the child. The children that were cancelled stay cancelled, and the parent's cancellation request stays open: once the cause is resolved, call FinalCancelBooking again (StartCancelBooking also works; it reuses the open request).",
         "operationId": "FinalCancelBooking",
         "responses": {
           "200": {
@@ -1811,15 +1811,15 @@
             }
           },
           "4xx": {
-            "description": "",
+            "description": "<div class=\"gds-codes\">\n\n| HTTP STATUS CODE | error_code |\n| --- | --- |\n| 400 | [`INVALID_ARGUMENT`](#err-INVALID_ARGUMENT)<br>[`CANCEL_NOT_STARTED`](#err-CANCEL_NOT_STARTED)<br>[`BOOKING_ALREADY_CANCELLED`](#err-BOOKING_ALREADY_CANCELLED)<br>[`CANCEL_DEADLINE_PASSED`](#err-CANCEL_DEADLINE_PASSED)<br>[`BOOKING_ALREADY_ISSUED`](#err-BOOKING_ALREADY_ISSUED)<br>[`CANCEL_REFUND_CHANGED`](#err-CANCEL_REFUND_CHANGED)<br>[`BOOKING_NOT_CANCELLABLE`](#err-BOOKING_NOT_CANCELLABLE)<br>[`BOOKING_ADAPTER_BOOKING_NOT_CANCELLABLE`](#err-BOOKING_ADAPTER_BOOKING_NOT_CANCELLABLE)<br>[`BOOKING_ADAPTER_EXTERNAL_FAILED`](#err-BOOKING_ADAPTER_EXTERNAL_FAILED)<br>[`FAILED_PRECONDITION`](#err-FAILED_PRECONDITION) |\n| 401 | [`UNAUTHENTICATED`](#err-UNAUTHENTICATED) |\n| 403 | [`PERMISSION_DENIED`](#err-PERMISSION_DENIED) |\n| 404 | [`BOOKING_NOT_FOUND`](#err-BOOKING_NOT_FOUND)<br>[`BOOKING_ADAPTER_BOOKING_NOT_FOUND`](#err-BOOKING_ADAPTER_BOOKING_NOT_FOUND) |\n| 409 | [`ABORTED`](#err-ABORTED) |\n\n</div>",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           },
           "5xx": {
-            "description": "",
+            "description": "<div class=\"gds-codes\">\n\n| HTTP STATUS CODE | error_code |\n| --- | --- |\n| 500 | [`INTERNAL`](#err-INTERNAL)<br>[`BOOKING_ADAPTER_INTERNAL`](#err-BOOKING_ADAPTER_INTERNAL) |\n| 503 | [`BOOKING_ADAPTER_EXTERNAL_PENDING`](#err-BOOKING_ADAPTER_EXTERNAL_PENDING)<br>[`BOOKING_ADAPTER_EXTERNAL_OUT_OF_SERVICE`](#err-BOOKING_ADAPTER_EXTERNAL_OUT_OF_SERVICE)<br>[`UNAVAILABLE`](#err-UNAVAILABLE) |\n| 504 | [`DEADLINE_EXCEEDED`](#err-DEADLINE_EXCEEDED) |\n\n</div>",
             "schema": {
-              "$ref": "#/definitions/rpc.Status"
+              "$ref": "#/definitions/ErrorResponse"
             }
           }
         },
@@ -1840,6 +1840,50 @@
     }
   },
   "definitions": {
+    "ErrorDetail": {
+      "type": "object",
+      "properties": {
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Context for the error: request_id plus the keys documented on each error\ncode. Keys are never removed or renamed. The public HTTP APIs return only\nthese; gRPC clients and internal tools also receive further keys."
+        }
+      },
+      "description": "ErrorDetail is one entry of ErrorResponse.details."
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Canonical gRPC status code as a number (e.g. 9). The HTTP status follows\nthe standard google.rpc.Code mapping (9 → 400, 13 → 500, ...), except\nthat a request using an HTTP method the path does not accept gets HTTP\n405 with code 12."
+        },
+        "error_code": {
+          "type": "string",
+          "description": "Business error code, e.g. \"INSUFFICIENT_BALANCE\". When no business code\napplies it is the canonical code name (\"INTERNAL\", \"NOT_FOUND\", ...).\nNever empty. Branch on this field; treat a value you do not know as its\n`code`."
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable description. Its wording may change; never parse it.\nReturned as written for 4xx responses and for 5xx responses carrying a\nbusiness code; any other 5xx carries the HTTP status text only (e.g.\n\"Internal Server Error\")."
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/ErrorDetail"
+          },
+          "description": "Additional context. Each entry carries only `metadata`: request_id (quote\nit when contacting support) and the keys documented for the error code.\nRead error_code for the classification."
+        },
+        "retryable": {
+          "type": "boolean",
+          "description": "Whether the SAME request may be resent as is. Always present.\n  - With a business error_code: the verdict of the service that failed,\n    for this response. The same code can be retryable on one endpoint\n    and not on another, so this field is authoritative and the\n    Transient / Terminal notes on each code are guidance.\n  - With a canonical error_code: follows the code. DEADLINE_EXCEEDED,\n    RESOURCE_EXHAUSTED, ABORTED and UNAVAILABLE are retryable; every\n    other code is not."
+        }
+      },
+      "description": "ErrorResponse is the JSON body of every error (non-2xx) response from the\ngds-neo HTTP APIs. It documents the body only; no RPC takes or returns it.\n\"details\" entries carry no \"@type\" field, so parse the body with a plain\nJSON decoder."
+    },
     "ListContractedSuppliersResponse": {
       "type": "object",
       "properties": {
@@ -1874,40 +1918,6 @@
           "description": "Supplier's English-localized name. May be empty if the supplier did not provide one."
         }
       }
-    },
-    "protobuf.Any": {
-      "type": "object",
-      "properties": {
-        "@type": {
-          "type": "string",
-          "description": "A URL/resource name that uniquely identifies the type of the serialized\nprotocol buffer message. This string must contain at least\none \"/\" character. The last segment of the URL's path must represent\nthe fully qualified name of the type (as in\n`path/google.protobuf.Duration`). The name should be in a canonical form\n(e.g., leading \".\" is not accepted).\n\nIn practice, teams usually precompile into the binary all types that they\nexpect it to use in the context of Any. However, for URLs which use the\nscheme `http`, `https`, or no scheme, one can optionally set up a type\nserver that maps type URLs to message definitions as follows:\n\n* If no scheme is provided, `https` is assumed.\n* An HTTP GET on the URL must yield a [google.protobuf.Type][]\n  value in binary format, or produce an error.\n* Applications are allowed to cache lookup results based on the\n  URL, or have them precompiled into a binary to avoid any\n  lookup. Therefore, binary compatibility needs to be preserved\n  on changes to types. (Use versioned type names to manage\n  breaking changes.)\n\nNote: this functionality is not currently available in the official\nprotobuf release, and it is not used for type URLs beginning with\ntype.googleapis.com. As of May 2023, there are no widely used type server\nimplementations and no plans to implement one.\n\nSchemes other than `http`, `https` (or the empty scheme) might be\nused with implementation specific semantics."
-        }
-      },
-      "additionalProperties": {},
-      "description": "`Any` contains an arbitrary serialized protocol buffer message along with a\nURL that describes the type of the serialized message.\n\nProtobuf library provides support to pack/unpack Any values in the form\nof utility functions or additional generated methods of the Any type.\n\nExample 1: Pack and unpack a message in C++.\n\n    Foo foo = ...;\n    Any any;\n    any.PackFrom(foo);\n    ...\n    if (any.UnpackTo(&foo)) {\n      ...\n    }\n\nExample 2: Pack and unpack a message in Java.\n\n    Foo foo = ...;\n    Any any = Any.pack(foo);\n    ...\n    if (any.is(Foo.class)) {\n      foo = any.unpack(Foo.class);\n    }\n    // or ...\n    if (any.isSameTypeAs(Foo.getDefaultInstance())) {\n      foo = any.unpack(Foo.getDefaultInstance());\n    }\n\n Example 3: Pack and unpack a message in Python.\n\n    foo = Foo(...)\n    any = Any()\n    any.Pack(foo)\n    ...\n    if any.Is(Foo.DESCRIPTOR):\n      any.Unpack(foo)\n      ...\n\n Example 4: Pack and unpack a message in Go\n\n     foo := &pb.Foo{...}\n     any, err := anypb.New(foo)\n     if err != nil {\n       ...\n     }\n     ...\n     foo := &pb.Foo{}\n     if err := any.UnmarshalTo(foo); err != nil {\n       ...\n     }\n\nThe pack methods provided by protobuf library will by default use\n'type.googleapis.com/full.type.name' as the type URL and the unpack\nmethods only use the fully qualified type name after the last '/'\nin the type URL, for example \"foo.bar.com/x/y.z\" will yield type\nname \"y.z\".\n\nJSON\n====\nThe JSON representation of an `Any` value uses the regular\nrepresentation of the deserialized, embedded message, with an\nadditional field `@type` which contains the type URL. Example:\n\n    package google.profile;\n    message Person {\n      string first_name = 1;\n      string last_name = 2;\n    }\n\n    {\n      \"@type\": \"type.googleapis.com/google.profile.Person\",\n      \"firstName\": <string>,\n      \"lastName\": <string>\n    }\n\nIf the embedded message type is well-known and has a custom JSON\nrepresentation, that representation will be embedded adding a field\n`value` which holds the custom JSON in addition to the `@type`\nfield. Example (for message [google.protobuf.Duration][]):\n\n    {\n      \"@type\": \"type.googleapis.com/google.protobuf.Duration\",\n      \"value\": \"1.212s\"\n    }"
-    },
-    "rpc.Status": {
-      "type": "object",
-      "properties": {
-        "code": {
-          "type": "integer",
-          "format": "int32",
-          "description": "The status code, which should be an enum value of\n[google.rpc.Code][google.rpc.Code]."
-        },
-        "message": {
-          "type": "string",
-          "description": "A developer-facing error message, which should be in English. Any\nuser-facing error message should be localized and sent in the\n[google.rpc.Status.details][google.rpc.Status.details] field, or localized\nby the client."
-        },
-        "details": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/protobuf.Any"
-          },
-          "description": "A list of messages that carry the error details.  There is a common set of\nmessage types for APIs to use."
-        }
-      },
-      "description": "The `Status` type defines a logical error model that is suitable for\ndifferent programming environments, including REST APIs and RPC APIs. It is\nused by [gRPC](https://github.com/grpc). Each `Status` message contains\nthree pieces of data: error code, error message, and error details.\n\nYou can find out more about this error model and how to work with it in the\n[API Design Guide](https://cloud.google.com/apis/design/errors)."
     },
     "Activity": {
       "type": "object",
@@ -1990,6 +2000,10 @@
           "type": "string",
           "format": "int64",
           "title": "version"
+        },
+        "cancellation_policy": {
+          "$ref": "#/definitions/external.CancellationPolicy",
+          "title": "cancellation policies"
         },
         "updated_at": {
           "type": "string",
@@ -2986,8 +3000,13 @@
           "title": "activity detail"
         },
         "cancellation_policy": {
-          "$ref": "#/definitions/external.CancellationPolicy",
-          "title": "cancellation policies"
+          "description": "--- Legacy field, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `activity.cancellation_policy` instead. To be removed in a future major version.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/external.CancellationPolicy"
+            }
+          ],
+          "deprecated": true
         }
       }
     },
@@ -3705,84 +3724,96 @@
           "items": {
             "$ref": "#/definitions/BookingField.Id"
           },
-          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version."
+          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version.",
+          "deprecated": true
         },
         "optional_booking_fields": {
           "type": "array",
           "items": {
             "$ref": "#/definitions/BookingField.Id"
           },
-          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version."
+          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version.",
+          "deprecated": true
         },
         "voucher_hidden_fields": {
           "type": "array",
           "items": {
             "$ref": "#/definitions/BookingField.Id"
           },
-          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version."
+          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version.",
+          "deprecated": true
         },
         "booking_details_hidden_fields": {
           "type": "array",
           "items": {
             "$ref": "#/definitions/BookingField.Id"
           },
-          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version."
+          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version.",
+          "deprecated": true
         },
         "required_extended_booking_fields": {
           "type": "array",
           "items": {
             "$ref": "#/definitions/ExtendedBookingField.Id"
           },
-          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version."
+          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version.",
+          "deprecated": true
         },
         "optional_extended_booking_fields": {
           "type": "array",
           "items": {
             "$ref": "#/definitions/ExtendedBookingField.Id"
           },
-          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version."
+          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version.",
+          "deprecated": true
         },
         "voucher_hidden_extended_fields": {
           "type": "array",
           "items": {
             "$ref": "#/definitions/ExtendedBookingField.Id"
           },
-          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version."
+          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version.",
+          "deprecated": true
         },
         "booking_details_hidden_extended_fields": {
           "type": "array",
           "items": {
             "$ref": "#/definitions/ExtendedBookingField.Id"
           },
-          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version."
+          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version.",
+          "deprecated": true
         },
         "required_participant_fields": {
           "type": "array",
           "items": {
             "$ref": "#/definitions/ExtendedParticipantField.Id"
           },
-          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version."
+          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version.",
+          "deprecated": true
         },
         "optional_participant_fields": {
           "type": "array",
           "items": {
             "$ref": "#/definitions/ExtendedParticipantField.Id"
           },
-          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version."
+          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version.",
+          "deprecated": true
         },
         "voucher_hidden_participant_fields": {
           "type": "array",
           "items": {
             "$ref": "#/definitions/ExtendedParticipantField.Id"
           },
-          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version."
+          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version.",
+          "deprecated": true
         },
         "booking_details_hidden_participant_fields": {
           "type": "array",
           "items": {
             "$ref": "#/definitions/ExtendedParticipantField.Id"
           },
-          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version."
+          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version.",
+          "deprecated": true
         },
         "custom_fields": {
           "type": "array",
@@ -3790,7 +3821,8 @@
             "type": "object",
             "$ref": "#/definitions/CustomField"
           },
-          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version."
+          "description": "--- Legacy fields, deprecated ---\nKept only for backward compatibility with existing OTA integrations.\nPrefer `booking_field_specs` / `custom_field_specs` above. To be removed in a future major version.",
+          "deprecated": true
         }
       },
       "description": "BookingForm describes the fields the booking request must / may carry for a plan.\n\nPrefer `booking_field_specs` and `custom_field_specs` (self-describing: each entry tells you the\nvalue's JSON path in the StartBooking payload, its type, whether it is required,\nand — for enum-typed fields — the allowed values). The legacy enum-id lists\nunder field numbers 100+ are retained for backward compatibility only and will\nbe removed in a future major version."
@@ -3937,15 +3969,7 @@
         "language_code": {
           "$ref": "#/definitions/Language"
         }
-      },
-      "required": [
-        "activity_id",
-        "activity_name",
-        "plan_id",
-        "plan_name",
-        "target_date",
-        "language_code"
-      ]
+      }
     },
     "CheckAvailabilityAndCalculateAmountResponse.planItem": {
       "type": "object",
@@ -3971,11 +3995,7 @@
         "payment_amount": {
           "$ref": "#/definitions/price.Price"
         }
-      },
-      "required": [
-        "plan_item_id",
-        "plan_item_name"
-      ]
+      }
     },
     "GetPriceAndAvailabilityCalendarResponse": {
       "type": "object",
@@ -3996,12 +4016,7 @@
         "language_code": {
           "$ref": "#/definitions/Language"
         }
-      },
-      "required": [
-        "activity_id",
-        "activity_name",
-        "language_code"
-      ]
+      }
     },
     "day": {
       "type": "object",
@@ -4017,10 +4032,7 @@
             "$ref": "#/definitions/plan.planItem"
           }
         }
-      },
-      "required": [
-        "date"
-      ]
+      }
     },
     "plan": {
       "type": "object",
@@ -4041,12 +4053,7 @@
             "$ref": "#/definitions/day"
           }
         }
-      },
-      "required": [
-        "plan_id",
-        "plan_name",
-        "confirmation_type"
-      ]
+      }
     },
     "plan.planItem": {
       "type": "object",
@@ -4068,11 +4075,7 @@
           "type": "string",
           "title": "a HH:MM local time value indicate the start time of this plan item, if any"
         }
-      },
-      "required": [
-        "plan_item_id",
-        "plan_item_name"
-      ]
+      }
     },
     "unit": {
       "type": "object",
@@ -4102,11 +4105,7 @@
         "unit_type": {
           "$ref": "#/definitions/UnitType"
         }
-      },
-      "required": [
-        "plan_unit_id",
-        "unit_name"
-      ]
+      }
     },
     "unitRequest": {
       "type": "object",
@@ -4241,7 +4240,7 @@
         "CANCEL_FAILED"
       ],
       "default": "CANCEL_SUCCEED",
-      "description": " - CANCEL_SUCCEED: Cancellation succeeded.\n - CANCEL_PENDING: Cancellation in progress (waiting for supplier response).\n - CANCEL_FAILED: Cancellation failed."
+      "description": " - CANCEL_SUCCEED: Cancellation succeeded.\n - CANCEL_PENDING: Cancellation in progress (waiting for supplier response).\n - CANCEL_FAILED: Deprecated. Never returned any more: a failed cancellation is an HTTP error with a business error_code. Kept so existing clients still compile; will be reserved in a later version."
     },
     "CancelCheckCode": {
       "type": "string",
@@ -4462,31 +4461,31 @@
           "type": "number",
           "format": "double",
           "example": 2484,
-          "description": "Net amount."
+          "description": "Net amount of the original booking in this currency (the price the OTA pays Link)."
         },
         "gross": {
           "type": "number",
           "format": "double",
           "example": 2700,
-          "description": "Gross amount."
+          "description": "Gross amount of the original booking in this currency (the selling price to the traveler)."
         },
         "net_refund": {
           "type": "number",
           "format": "double",
           "example": 2044,
-          "description": "Refund amount."
+          "description": "Amount Link refunds to the OTA in this currency: `net` minus `cancel_fee`, plus the commission the OTA keeps on the cancellation."
         },
         "gross_refund": {
           "type": "number",
           "format": "double",
           "example": 2260,
-          "description": "Refund amount."
+          "description": "Amount the traveler gets back in this currency: `gross` minus `cancel_fee`."
         },
         "cancel_fee": {
           "type": "number",
           "format": "double",
           "example": 440,
-          "description": "Cancel fee amount."
+          "description": "Cancellation fee charged to the traveler, in this currency."
         }
       },
       "title": "Price"
@@ -4604,7 +4603,7 @@
         "cancel_by": {
           "type": "string",
           "example": "Gary Chen",
-          "description": "Identifier of who initiated the cancellation."
+          "description": "Who on the OTA side initiated the cancellation, as free text: an operator name, a user id or a system name. Link does not check the format and sets no length limit, but keep it short. It is stored on the cancellation record for audit and returned as `cancel_by` in the `CANCELED` webhook."
         }
       },
       "title": "FinalCancelBooking",
@@ -4619,30 +4618,30 @@
         "parent_result": {
           "example": {
             "booking_id": "PRIVATE-20260212-WR2F2VHE",
-            "status": "CANCEL_FAILED",
-            "failed_reason": "Cancellation failed due to supplier restrictions."
+            "status": "CANCEL_SUCCEED"
           },
-          "description": "Cancellation result for the parent booking. For non-bundle bookings, this is the only result.",
+          "description": "Deprecated; read the top-level `booking_id` and `status` instead. Still filled for now (same booking and status as the top-level fields); will be removed in a later version.",
           "allOf": [
             {
               "$ref": "#/definitions/Result"
             }
-          ]
-        },
-        "children_results": {
-          "type": "array",
-          "example": [
-            {
-              "booking_id": "PRIVATE-20260212-WR2F2VHE",
-              "status": "CANCEL_FAILED",
-              "failed_reason": "Cancellation failed due to supplier restrictions."
-            }
           ],
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/Result"
-          },
-          "description": "Cancellation results for child bookings. Empty for non-bundle bookings."
+          "deprecated": true
+        },
+        "booking_id": {
+          "type": "string",
+          "example": "PRIVATE-20260212-WR2F2VHE",
+          "description": "The booking the request was made for (the bundle parent for a bundle). Present on every 200 response."
+        },
+        "status": {
+          "example": "CANCEL_SUCCEED",
+          "description": "Outcome of this call. `CANCEL_SUCCEED`: the booking is cancelled. `CANCEL_PENDING`: the supplier has taken the cancellation but not confirmed it yet; call FinalCancelBooking again later. A cancellation that did not go through is an HTTP error, so `CANCEL_FAILED` never appears here.",
+          "type": "string",
+          "enum": [
+            "CANCEL_SUCCEED",
+            "CANCEL_PENDING",
+            "CANCEL_FAILED"
+          ]
         }
       },
       "title": "FinalCancelBookingResponse"
@@ -4950,9 +4949,9 @@
         },
         "expiry": {
           "type": "string",
-          "format": "int64",
-          "example": "1755123456",
-          "description": "The reservation expiry time as Unix time in seconds. Normally non-null. If the booking adapter does not provide an expiry, a 15-minute fallback is applied."
+          "format": "date-time",
+          "example": "2026-02-13T10:05:17Z",
+          "description": "The reservation expiry time in RFC 3339 format, the same value StartBooking returned in `expiry`. Normally non-null. If the booking adapter does not provide an expiry, a 15-minute fallback is applied."
         },
         "language_code": {
           "example": "JAPANESE",
@@ -5023,7 +5022,7 @@
           "description": "Agent Booking Id."
         }
       },
-      "title": "CancelBookingResult"
+      "title": "BookingSession"
     },
     "LocalizedValue": {
       "type": "object",
@@ -5384,8 +5383,8 @@
           "description": "The unique identifier of the booking."
         },
         "status": {
-          "example": "CANCEL_FAILED",
-          "description": "Cancellation result. `CANCEL_SUCCEED`: the booking is cancelled. `CANCEL_PENDING`: the supplier has taken the cancellation but not confirmed it; call FinalCancelBooking again later to pick up the result. `CANCEL_FAILED`: the booking is not cancelled and `failed_reason` carries the reason. All three are returned with HTTP 200.",
+          "example": "CANCEL_SUCCEED",
+          "description": "Deprecated together with `parent_result`; read the top-level `status` instead. On a 200 response this is `CANCEL_SUCCEED` or `CANCEL_PENDING`; `CANCEL_FAILED` is never returned any more.",
           "type": "string",
           "enum": [
             "CANCEL_SUCCEED",
@@ -5396,7 +5395,8 @@
         "failed_reason": {
           "type": "string",
           "example": "Cancellation failed due to supplier restrictions.",
-          "description": "Reason for cancellation failure. Only present when status is CANCEL_FAILED. English text for logs and support tickets; its wording may change between releases, so do not branch on it."
+          "description": "Deprecated. Always null: a failed cancellation is an HTTP error whose `message` carries the reason.",
+          "deprecated": true
         }
       },
       "title": "CancelBookingResult"
@@ -5429,7 +5429,7 @@
         },
         "country_code": {
           "example": "JPN",
-          "description": "Traveler's country. This is an enum field; please provide the string representation of the enum value. Source: https://en.wikipedia.org/wiki/ISO_3166-1_alpha-3",
+          "description": "Country code of the OTA placing the booking, in ISO 3166-1 alpha-3 format. This is an enum field; please provide the string representation of the enum value, for example \"JPN\". Fill in your own country; the same fixed value can be sent on every request. Optional: when it is omitted, the booking records `UNIVERSAL`. Link keeps it on the booking for its own finance records; it is not sent to the supplier and does not affect the price. It is not the participant's country: that is `participant_info.booking_representative_fields.participant_resident_region`, the country the participant lives in, which is sent to suppliers that need it, printed on the voucher, and required or optional depending on the activity's booking form. Source: https://en.wikipedia.org/wiki/ISO_3166-1_alpha-3",
           "type": "string",
           "enum": [
             "UNDEFINED",
@@ -6086,7 +6086,6 @@
       "title": "StartBookingRequest",
       "required": [
         "language_code",
-        "country_code",
         "activity_id",
         "plan_id",
         "plan_item_id",
@@ -6263,7 +6262,7 @@
             "type": "object",
             "$ref": "#/definitions/UnitPrice"
           },
-          "description": "When tickets are sold between a Supplier and an OTA, different currencies may be used by each party, as illustrated below:\n\n  - Supplier currency: Japanese yen  \n    Example: Tokyo Metro\n  - OTA payment currency: Chinese yuan  \n    Example: Klook\n  - Currency displayed to the traveler: U.S. dollars  \n    Example: A traveler from the United States purchasing a ticket for Japan through Klook\n\nIn this case, each price field is used as follows:\n\n  - `supplier_currency_price`  \n    The original price of the product in the currency provided by the Supplier. In the example above, this is the price in Japanese yen.\n\n  - `payment_currency_price`  \n    The price converted by LINK from the Supplier's currency into the OTA's payment currency. In the example above, this is the price converted from Japanese yen to Chinese yuan.\n\n  - `display_currency_price`  \n    The price converted by LINK from the Supplier's currency into the currency displayed to the traveler. In the example above, this is the price converted from Japanese yen to U.S. dollars.\n\nPlease note that the currency used by `display_currency_price` is determined by the `display_currency_code` specified in the request payload.\n\nIf there is no need to display a converted price to the traveler, you may specify a fixed currency, such as Japanese yen, in `display_currency_code` and simply disregard the corresponding `display_currency_price` returned in the response."
+          "description": "When tickets are sold between a Supplier and an OTA, different currencies may be used by each party, as illustrated below:\n\n  - Supplier currency: Japanese yen  \n    Example: Tokyo Metro\n  - OTA payment currency: U.S. dollars  \n    Example: An OTA that settles with LINK in U.S. dollars\n  - Currency displayed to the traveler: Chinese yuan  \n    Example: A traveler from China purchasing a ticket for Japan through that OTA\n\nIn this case, each price field is used as follows:\n\n  - `supplier_currency_price`  \n    The original price of the product in the currency provided by the Supplier. In the example above, this is the price in Japanese yen.\n\n  - `payment_currency_price`  \n    The price converted by LINK from the Supplier's currency into the OTA's payment currency. In the example above, this is the price converted from Japanese yen to U.S. dollars.\n\n  - `display_currency_price`  \n    The price converted by LINK from the Supplier's currency into the currency displayed to the traveler. In the example above, this is the price converted from Japanese yen to Chinese yuan.\n\nPlease note that the currency used by `display_currency_price` is determined by the `display_currency_code` specified in the request payload.\n\nIf there is no need to display a converted price to the traveler, you may specify a fixed currency, such as Japanese yen, in `display_currency_code` and simply disregard the corresponding `display_currency_price` returned in the response."
         }
       },
       "title": "StartBookingResponse"
@@ -6287,15 +6286,13 @@
       "properties": {
         "cancel_check_code": {
           "example": "CAN_BE_CANCELLED",
-          "description": "Cancellation check result. `CAN_BE_CANCELLED` means the booking can be cancelled and `cancel_refund_display` holds the refund breakdown. `ALREADY_CANCELLED`, `BOOKING_EXPIRED` and `CAN_NOT_CANCEL` mean it cannot, and `cancel_refund_display` is null. A booking that cannot be cancelled still returns HTTP 200. `SHOULD_DECLINE_INSTEAD_OF_CANCEL` belongs to supplier-side cancellation and is never returned here.",
-          "type": "string",
-          "enum": [
-            "CAN_BE_CANCELLED",
-            "ALREADY_CANCELLED",
-            "CAN_NOT_CANCEL",
-            "BOOKING_EXPIRED",
-            "SHOULD_DECLINE_INSTEAD_OF_CANCEL"
-          ]
+          "description": "Deprecated. Always `CAN_BE_CANCELLED` on a 200 response: a booking that cannot be cancelled is reported as an HTTP error with a business `error_code`. The field will be removed in a later version; do not branch on it.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CancelCheckCode"
+            }
+          ],
+          "deprecated": true
         },
         "cancel_refund_display": {
           "example": {
@@ -6320,13 +6317,13 @@
               "net": 121.17,
               "gross": 131.71,
               "net_refund": 99.71,
-              "gross_refund": 153.17,
+              "gross_refund": 110.25,
               "cancel_fee": 21.46
             },
             "refund_rule_type": "FIXED",
             "cancel_at": "2026-02-13T10:05:17Z"
           },
-          "description": "Refund display information for the cancellation. When tickets are sold between a Supplier and an OTA, different currencies may be used by each party, as illustrated below:\n\n  - Supplier currency: Japanese yen  \n    Example: Tokyo Metro\n  - OTA payment currency: Chinese yuan  \n    Example: Klook\n  - Currency displayed to the traveler: U.S. dollars  \n    Example: A traveler from the United States purchasing a ticket for Japan through Klook\n\nIn this case, each price field is used as follows:\n\n  - `supplier_currency_price`  \n    The original price of the product in the currency provided by the Supplier. In the example above, this is the price in Japanese yen.\n\n  - `payment_currency_price`  \n    The price converted by LINK from the Supplier's currency into the OTA's payment currency. In the example above, this is the price converted from Japanese yen to Chinese yuan.\n\n  - `display_currency_price`  \n    The price converted by LINK from the Supplier's currency into the currency displayed to the traveler. In the example above, this is the price converted from Japanese yen to U.S. dollars.\n\nPlease note that the currency used by `display_currency_price` is determined by the `display_currency_code` specified in the original StartBooking request payload.\n\nIf there is no need to display a converted price to the traveler, you may specify a fixed currency, such as Japanese yen, in `display_currency_code` when starting the booking and simply disregard the corresponding `display_currency_price` returned in the response.",
+          "description": "Refund display information for the cancellation. When tickets are sold between a Supplier and an OTA, different currencies may be used by each party, as illustrated below:\n\n  - Supplier currency: Japanese yen  \n    Example: Tokyo Metro\n  - OTA payment currency: U.S. dollars  \n    Example: An OTA that settles with LINK in U.S. dollars\n  - Currency displayed to the traveler: Chinese yuan  \n    Example: A traveler from China purchasing a ticket for Japan through that OTA\n\nIn this case, each price field is used as follows:\n\n  - `supplier_currency_price`  \n    The original price of the product in the currency provided by the Supplier. In the example above, this is the price in Japanese yen.\n\n  - `payment_currency_price`  \n    The price converted by LINK from the Supplier's currency into the OTA's payment currency. In the example above, this is the price converted from Japanese yen to U.S. dollars.\n\n  - `display_currency_price`  \n    The price converted by LINK from the Supplier's currency into the currency displayed to the traveler. In the example above, this is the price converted from Japanese yen to Chinese yuan.\n\nPlease note that the currency used by `display_currency_price` is determined by the `display_currency_code` specified in the original StartBooking request payload.\n\nIf there is no need to display a converted price to the traveler, you may specify a fixed currency, such as Japanese yen, in `display_currency_code` when starting the booking and simply disregard the corresponding `display_currency_price` returned in the response.",
           "allOf": [
             {
               "$ref": "#/definitions/external.CancelRefundDisplay"
@@ -6521,7 +6518,7 @@
       },
       "title": "UpdateBookingParticipantInfo",
       "required": [
-        "id",
+        "booking_id",
         "participant_info"
       ]
     },
@@ -6713,7 +6710,7 @@
         },
         "status": {
           "example": "CONFIRMED",
-          "description": "The current status of the booking.",
+          "description": "The current status of the booking. `CANCEL_FAILED` can still appear here even though FinalCancelBooking never returns it: Link sets it when a FinalCancelBooking failed after the supplier had already accepted the cancellation (that call returned an HTTP error), or when a bundle parent's cancellation stopped because a child booking failed or is still waiting for its supplier. Such a booking is not cancelled. A bundle parent can be resumed by calling FinalCancelBooking again; otherwise call StartCancelBooking again to retry, and contact support if it fails again.",
           "type": "string",
           "enum": [
             "UNDEFINED",
@@ -6808,7 +6805,7 @@
           "type": "string",
           "format": "date-time",
           "example": "2026-04-01T14:53:34.000Z",
-          "description": "Timestamp in RFC3339 format when the voucher was first issued (issued_status became ISSUED or PARTIAL). Switching between PARTIAL and ISSUED does not change it. null when the booking is not issued, including after an issuance is reverted. e.g. 2026-04-01T14:53:34.000Z"
+          "description": "Timestamp in RFC3339 format when issued_status changed to ISSUED or PARTIAL. Updated on every change of issued_status, including switching between PARTIAL and ISSUED; unchanged when the status stays the same. null when the booking is not issued, including after an issuance is reverted. e.g. 2026-04-01T14:53:34.000Z"
         },
         "order_count": {
           "type": "string",
@@ -6828,7 +6825,7 @@
         },
         "participant_resident_region": {
           "example": "JPN",
-          "description": "Resident region of the participant in ISO 3166-1 alpha-3 format.",
+          "description": "Country the participant lives in, in ISO 3166-1 alpha-3 format, as sent in `participant_info.booking_representative_fields.participant_resident_region`. Not the same as the `country_code` sent in StartBooking, which is the OTA's own country.",
           "type": "string",
           "enum": [
             "UNDEFINED",
@@ -7138,7 +7135,7 @@
             "net": 121.17,
             "gross": 131.71,
             "net_refund": 99.71,
-            "gross_refund": 153.17,
+            "gross_refund": 110.25,
             "cancel_fee": 21.46
           },
           "description": "Display price details.",
@@ -7150,7 +7147,7 @@
         },
         "refund_rule_type": {
           "example": "FIXED",
-          "description": "Type of refund rule applied.",
+          "description": "The kind of cancellation fee rule that produced the amounts. `FIXED`: a fixed fee. `PERCENTAGE`: a percentage of the price. `FULL_REFUND`: no fee. `NOT_YET_CHARGED`: a REQUEST booking cancelled before it was charged, so there is nothing to refund. `NOT_CANCELLATION` is no longer produced: a booking whose policy forbids cancellation is rejected by StartCancelBooking with `BOOKING_NOT_CANCELLABLE`, so it only appears in GetBooking for bookings cancelled before that check existed. `REFUND_FAILED` appears only when the booking's cancellation policy has no fee rule Link can apply; the amounts then show no fee and `refund_failed_reason` says why. Contact support in that case.",
           "type": "string",
           "enum": [
             "UNDEFINED",
@@ -7165,7 +7162,7 @@
         "refund_failed_reason": {
           "type": "string",
           "example": "Refund not applicable due to non-refundable policy.",
-          "description": "Reason for refund failure, if applicable."
+          "description": "Set only when `refund_rule_type` is `REFUND_FAILED`: a short English note for support explaining why the cancellation policy could not be applied. Its wording may change; do not parse it."
         },
         "cancel_at": {
           "type": "string",
