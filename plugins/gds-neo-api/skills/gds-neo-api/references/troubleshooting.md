@@ -2,50 +2,67 @@
 
 ## Start here: read the error body
 
-Every `4xx` and `5xx` returns an `rpc.Status`:
-
-The shape, with the one error the spec documents concretely — `start-booking` rejecting a
-`language_code` the activity doesn't support:
+Every `4xx` and `5xx` returns an `ErrorResponse`:
 
 ```json
 {
-  "code": 3,
-  "message": "...",
+  "code": 9,
+  "error_code": "BOOKING_ADAPTER_BOOKING_NO_AVAILABILITY",
+  "message": "booking adapter error",
   "details": [
     {
-      "@type": "type.googleapis.com/google.rpc.ErrorInfo",
       "metadata": {
-        "LANGUAGE_CODE": "GERMAN",
-        "ALLOWED_LANGS": "...",
-        "ACTIVITY_ID": "LINKTIVITY-1QCOC"
+        "booking_adapter_error_code": "2004",
+        "request_id": "e9c30653-eafa-4169-a08e-9e28748adb69"
       }
     }
-  ]
+  ],
+  "retryable": false
 }
 ```
 
-The three `metadata` keys are documented in the spec's `StartBookingRequest.language_code`
-description. The exact `message`, `reason` and `domain` values are not documented anywhere —
-read them from the real response rather than matching on them, and don't build logic around
-string equality with a `reason` you haven't observed in your own environment.
+The one exception: requests rejected by the auth check at the HTTP edge return
+`{"message": "..."}` only — see `auth.md`.
 
-`code` is a numeric [google.rpc.Code](https://cloud.google.com/apis/design/errors), **not**
-the HTTP status. `details[]` is where the actionable information is. If an integrator says
-"the error doesn't tell me anything", the first question is whether they are logging
-`details[]` — most client wrappers throw away everything but `message`.
+- **Branch on `error_code`**, never on `message` (its wording changes). New values can appear
+  at any time; handle an unknown one by its `code`.
+- **`retryable` decides resends.** `true`: resend the same request as is after a short wait.
+  `false`: don't; act on `error_code`. It is authoritative — the same code can be retryable on
+  one endpoint and not another.
+- **`details[].metadata`** carries `request_id` (quote it to support) plus the keys documented
+  for the code — `field` / `constraint` for validation errors, `booking_id` for cancellation
+  errors. If an integrator says "the error doesn't tell me anything", ask whether they log
+  the whole body — most client wrappers keep only `message`.
 
-Common `code` values and what they mean here:
+When no business code applies, `error_code` is the gRPC code name:
 
-| `code` | Name | Typical meaning in the GDS API |
+| `error_code` | `code` | HTTP | Meaning | `retryable` |
+| --- | --- | --- | --- | --- |
+| `INVALID_ARGUMENT` | 3 | 400 | Body isn't valid JSON, or a field fails validation without a more specific code. | false |
+| `DEADLINE_EXCEEDED` | 4 | 504 | Passed the 30 s server limit. **Outcome unknown** — check state before resending a booking or cancellation. | true |
+| `NOT_FOUND` | 5 | 404 | Entity doesn't exist and no more specific code applies. | false |
+| `PERMISSION_DENIED` | 7 | 403 | The entity belongs to another OTA or OTA group. | false |
+| `RESOURCE_EXHAUSTED` | 8 | 429 | Quota or rate limit. Back off. | true |
+| `FAILED_PRECONDITION` | 9 | 400 | Wrong state for the operation; the endpoint description names the cases. | false |
+| `ABORTED` | 10 | 409 | Another request is working on the same session/booking/bundle. Resend after a few seconds. | true |
+| `UNIMPLEMENTED` | 12 | 405 | Wrong HTTP method for the path. | false |
+| `INTERNAL` | 13 | 500 | Internal error. Quote `request_id`. | false |
+| `UNAVAILABLE` | 14 | 503 | A dependency is unreachable. | true |
+| `UNAUTHENTICATED` | 16 | 401 | Missing header, bad signature, or `timestamp` out of range — see `auth.md`. | false |
+
+Business codes you will meet most (the full table, with metadata keys, is in the spec's
+`info.description` under **Errors**):
+
+| `error_code` | HTTP | Meaning |
 | --- | --- | --- |
-| 3 | `INVALID_ARGUMENT` | A field is missing, malformed, or not allowed for this activity. Read `details[]`. |
-| 5 | `NOT_FOUND` | An id doesn't exist, or an expired session id. |
-| 7 | `PERMISSION_DENIED` | Credentials valid but not entitled to this supplier or activity. |
-| 9 | `FAILED_PRECONDITION` | Correct request, wrong state — e.g. confirming an expired session, cancelling an already-cancelled booking. |
-| 8 | `RESOURCE_EXHAUSTED` | Inventory unavailable, or the pending-reservation limit reached. |
-| 16 | `UNAUTHENTICATED` | The 401 family — see `auth.md`. |
-| 14 | `UNAVAILABLE` | Supplier system down or timing out. Retry with backoff. |
-| 4 | `DEADLINE_EXCEEDED` | Supplier didn't respond in time. Do **not** blindly retry a booking — check state first. |
+| `VALIDATION_FAILED` | 400 | Any endpoint: a field failed validation. One `details` entry per field (`field`, `constraint`). |
+| `BOOKING_REQUIRED_INFO_MISSING` | 400 | StartBooking: a required participant/booking field is missing or malformed. Per field. |
+| `BOOKING_INVALID_FORM_RESPONSE` | 400 | StartBooking: a custom form response is missing or invalid. Per response. |
+| `INSUFFICIENT_BALANCE` | 400 / 503 | Wallet can't cover the booking. **400**: nothing booked — top up, then retry. **503** (FinalBooking, after the supplier placed it): the booking is **held** — top up and resend FinalBooking on the same session; never create a new booking. |
+| `BOOKING_ADAPTER_*` | various | The supplier rejected or failed the operation (`..._NO_AVAILABILITY`, `..._NOT_ENOUGH_ALLOTMENT`, `..._DEADLINE_PASSED`, `..._EXTERNAL_PENDING`, ...). `message` is always `booking adapter error`; tell them apart by `error_code`. Ignore the legacy `booking_adapter_error_code` metadata — it will be removed. |
+| `BOOKING_ADAPTER_INTERNAL` | 500 | The supplier connection failed unclassifiably. **Outcome unknown** — don't assume the supplier did nothing. |
+
+Cancellation codes are listed under **Cancellation failures** below.
 
 ## Authentication
 
@@ -63,7 +80,7 @@ The two fastest discriminators:
 
 ## `start-booking` failures
 
-**`InvalidArgument` naming `LANGUAGE_CODE` / `ALLOWED_LANGS`.** The `language_code` you sent
+**`INVALID_ARGUMENT` with `LANGUAGE_CODE` / `ALLOWED_LANGS` in `details[].metadata`.** The `language_code` you sent
 isn't among the activity's configured languages. Read `activity.language_codes` from
 `get-activity-detail` and send one of those. This is the single most common first-day
 failure.
@@ -95,7 +112,9 @@ available. Call `check-availability-and-calculate-amount` immediately before boo
 `list-reservations` and release the orphans with `cancel-reservations`. Fix the root cause:
 every abandoned checkout must trigger a `cancel-reservations`.
 
-**`participant_info` rejected.** Work through `booking-form.md`. The recurring causes are:
+**`participant_info` rejected** (`BOOKING_REQUIRED_INFO_MISSING` /
+`BOOKING_INVALID_FORM_RESPONSE`). `details[].metadata.field` names each offending field. Work
+through `booking-form.md`. The recurring causes are:
 `weight_kg` / `height_cm` / `shoe_size_cm` sent as numbers instead of strings; `gender` not
 exactly `"male"` / `"female"` / `"other"`; a custom field's `responses` containing an index
 or id instead of the choice **label**; and the `user_information_fields[]` count or
@@ -130,27 +149,37 @@ booking, send a new key. Keys longer than 64 characters are rejected outright.
 
 ## Cancellation failures
 
-**`cancel_check_code` isn't `CAN_BE_CANCELLED`.** Each value has a distinct meaning; see the
-table in `flow.md`. Notably `ALREADY_CANCELLED` is a terminal, benign state — not something
-to retry — and `SHOULD_DECLINE_INSTEAD_OF_CANCEL` means the booking is a `REQUEST` still
-awaiting review, which is a decline flow rather than a cancellation.
+A booking that can't be cancelled, or a cancellation that didn't go through, is an HTTP error
+with a business `error_code` — never a 200. (`cancel_check_code` is deprecated and always
+`CAN_BE_CANCELLED` on a 200; `CANCEL_FAILED` never appears in a `final-cancel-booking` 200.)
 
-**`CANCEL_PENDING`.** Not a failure. Some suppliers cancel asynchronously. Poll
-`get-booking` until the booking status leaves `CANCEL_PENDING`. Do **not** retry
-`final-cancel-booking` while pending.
+| `error_code` | Endpoint | Meaning / what to do |
+| --- | --- | --- |
+| `BOOKING_NOT_FOUND` | both | No booking matches `booking_id`. |
+| `BOOKING_ALREADY_CANCELLED` | both | Terminal and benign. Treat as settled; don't retry. |
+| `CANCEL_DEADLINE_PASSED` | both | The voucher expiration time has passed. |
+| `BOOKING_ALREADY_ISSUED` | both | The voucher is redeemed in full or in part. |
+| `BOOKING_NOT_CANCELLABLE` | both | Status, policy, bulk/bundle constraint, or one bundle child forbids it. `message` tells the cases apart; `metadata.booking_id` names the blocking child for a bundle. Cancel a bundle via its parent. |
+| `CANCEL_NOT_STARTED` | final | No open cancellation request. Call `start-cancel-booking` first. |
+| `CANCEL_REFUND_CHANGED` | final | The fee changed since `start-cancel-booking`, so that request is void. Call `start-cancel-booking` again for the current amounts. |
 
-**`CANCEL_FAILED` with a `failed_reason`.** The supplier refused. Read `failed_reason`; it
-is passed through from the supplier and is usually specific.
+**`CANCEL_PENDING`.** Not a failure. Some suppliers cancel asynchronously or by hand. Call
+`final-cancel-booking` again later — it resumes the open request instead of cancelling twice.
 
-**Cancelling a bundle child directly fails.** Bundle child bookings are generally not
-directly cancellable. Cancel the parent; `FinalCancelBookingResponse.children_results[]`
-reports each child's outcome.
+**A bundle cancellation failed part-way.** One child's error fails the whole call, with
+`details[].metadata.booking_id` naming that child. Children already cancelled stay cancelled
+and the parent's request stays open: resolve the cause, then call `final-cancel-booking`
+again.
 
-**Refund amount differs from the quote.** `start-cancel-booking` gives an indicative figure.
-The actual fee is always recomputed server-side at cancel time, and crossing a
-`CancellationRule` boundary between quote and commit changes it. Quote and commit close
-together, and reconcile against the figures in `FinalCancelBookingResponse` /
-`get-booking`'s `cancel_refund`.
+**`get-booking` shows `CANCEL_FAILED`.** Still possible there even though
+`final-cancel-booking` never returns it: the call failed after the supplier had accepted, or a
+bundle stopped on a child. The booking is **not** cancelled. Resume a bundle parent with
+`final-cancel-booking`; otherwise retry from `start-cancel-booking`, and escalate if it fails
+again.
+
+**Refund amount differs from the quote.** It doesn't silently: `final-cancel-booking` applies
+exactly the amounts `start-cancel-booking` quoted, and fails with `CANCEL_REFUND_CHANGED` if
+they moved (e.g. a `CancellationRule` boundary was crossed). Quote and commit close together.
 
 **`is_cancellable_now` was `true` but cancellation failed.** Documented behaviour: it is
 evaluated at read time without holding a lock, so it's a hint, not a reservation.
@@ -221,10 +250,6 @@ Worth knowing because they surface as odd generated-client behaviour rather than
 sometimes produce `https://https//...`. Strip the scheme for the host and set it separately.
 The signing host is always the bare hostname.
 
-**`UpdateBookingParticipantInfoRequest.required` lists `id`, not `booking_id`.** The declared
-property is `booking_id`. Send `booking_id`. A generated client emitting `id` is the cause of
-an otherwise inexplicable `InvalidArgument`.
-
 **`session_id` vs `booking_session_id` vs `booking_session_ids`.** `StartBookingResponse`
 calls it `session_id`; `FinalBookingRequest` calls it `booking_session_id`; and
 `CancelReservationsRequest` takes an array named `booking_session_ids`. Same value, three
@@ -235,9 +260,6 @@ field names.
 `check-availability-and-calculate-amount` all use `display_currency`. `start-booking` uses
 `display_currency_code`. Sending the wrong one means the parameter is silently ignored and
 you get the OTA's default currency instead.
-
-**`expiry` has two formats.** `StartBookingResponse.expiry` is RFC 3339;
-`ListReservationsResponse.BookingSession.expiry` is Unix seconds as a string.
 
 **The `Prefecture` enum is defined as `Perfecture`.** Misspelled in the schema; the query
 parameter is correctly `prefecture` and the values are identical. Only affects generated
@@ -251,14 +273,14 @@ Send it as spelled.
 but **no path exposes them**. Don't code against them; confirm availability with Linktivity.
 
 **Named enum types whose values are inlined at each use site.** `BookingModel.Status`,
-`CancelCheckCode`, `CancelBookingStatus`, `IssuedStatus`, `RefundRuleType`, `QRCodeCodeType`,
+`CancelBookingStatus`, `IssuedStatus`, `RefundRuleType`, `QRCodeCodeType`,
 `cancellation.CancelReason` and `Perfecture` all exist as named definitions, but every
 operation and object that uses them repeats the value list inline instead of `$ref`-ing the
 definition. Consequence for code generation: you get a separate anonymous enum type per field
 rather than one shared type, so a value you can assign in one place won't type-check in
 another. Either post-process your generated client to collapse them, or hand-write the enums
 from `enums.md`. Of the 119 definitions, only `ParentBooking` and the three async types are
-genuinely unreachable; these eight are reachable by value, just not by reference.
+genuinely unreachable; these seven are reachable by value, just not by reference.
 
 **`4xx` / `5xx` as response keys.** The spec uses wildcard status keys rather than specific
 codes, so generated clients may not map individual statuses. Handle the ranges.
@@ -284,6 +306,6 @@ than debugging further, when:
   empty on a `CONFIRMED` booking.
 - Repeated `UNAVAILABLE` / `DEADLINE_EXCEEDED` from one supplier while others work.
 
-Include in the report: the full `rpc.Status` body with `details[]`, the `timestamp` header
+Include in the report: the full error body (including `error_code` and `details[].metadata.request_id`), the `timestamp` header
 value, the endpoint path, `agent_booking_id` and `booking_id` where applicable, and whether
 it is sandbox or production. Never include the API key secret.

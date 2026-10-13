@@ -7,7 +7,7 @@ you can ask it your integration questions directly instead of reading the whole 
 It knows the HMAC `signature-key` algorithm and can tell you which of nine common
 implementation mistakes produced a wrong signature. It knows every endpoint's parameters and
 required fields, the reserve-then-confirm booking and cancellation flows, how to map
-`booking_form` onto the `participant_info` payload, and how to read a `rpc.Status` error. The
+`booking_form` onto the `participant_info` payload, and how to read an `ErrorResponse`. The
 full OpenAPI spec is bundled, so answers are grounded in the actual schema rather than
 paraphrase.
 

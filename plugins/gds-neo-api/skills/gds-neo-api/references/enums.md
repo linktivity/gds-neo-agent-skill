@@ -66,7 +66,11 @@ Also the value set for the `booking_status` filter on `list-bookings`.
 | `PLAN_ITEM_AND_UNIT_SHARED` | Shared across both dimensions. |
 | `INDEPENDENT` | This unit on this plan item has its own inventory. |
 
-## `CancelCheckCode` — from `start-cancel-booking`
+## `CancelCheckCode` — from `start-cancel-booking` (deprecated)
+
+`StartCancelBookingResponse.cancel_check_code` is deprecated and always `CAN_BE_CANCELLED` on a
+200: a booking that can't be cancelled is an HTTP error with a business `error_code` (see
+`troubleshooting.md`). Don't branch on it. The values, for reading old data:
 
 | Value | Meaning |
 | --- | --- |
@@ -78,8 +82,9 @@ Also the value set for the `booking_status` filter on `list-bookings`.
 
 ## `CancelBookingStatus` — in `Result.status`
 
-`CANCEL_SUCCEED` (default), `CANCEL_PENDING` (waiting for supplier response),
-`CANCEL_FAILED`.
+Also `FinalCancelBookingResponse.status`. `CANCEL_SUCCEED` (default), `CANCEL_PENDING`
+(waiting for supplier response). `CANCEL_FAILED` is deprecated and never returned: a failed
+cancellation is an HTTP error with a business `error_code`.
 
 ## `cancellation.CancelReason` — optional on `final-cancel-booking`
 
@@ -96,10 +101,10 @@ Also the value set for the `booking_status` filter on `list-bookings`.
 | `UNDEFINED` | Reserved. |
 | `FIXED` | Fixed-amount refund. |
 | `PERCENTAGE` | Fixed-percentage refund. |
-| `NOT_CANCELLATION` | Non-refundable. |
-| `NOT_YET_CHARGED` | Not paid yet, so no refund is processed. |
+| `NOT_CANCELLATION` | No longer produced — a non-cancellable policy is now rejected by `start-cancel-booking` with `BOOKING_NOT_CANCELLABLE`. Only on bookings cancelled before that check existed. |
+| `NOT_YET_CHARGED` | A `REQUEST` booking cancelled before it was charged; nothing to refund. |
 | `FULL_REFUND` | Full refund. |
-| `REFUND_FAILED` | Refund failed — reason in `refund_failed_reason`. |
+| `REFUND_FAILED` | The policy has no fee rule Linktivity can apply; amounts show no fee and `refund_failed_reason` says why. Contact support. |
 
 ## `AsyncFinalBookingStatus`
 

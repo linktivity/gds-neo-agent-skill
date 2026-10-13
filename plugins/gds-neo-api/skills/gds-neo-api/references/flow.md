@@ -47,8 +47,9 @@ the `Activity` with its `plans[]`, and each plan carries:
 - `min_capacity_inclusive` / `max_capacity_inclusive` — the allowed total unit count.
 - `voucher_expiration_period` — when the issued voucher stops being valid.
 
-The response's `cancellation_policy` sits at the top level of `GetActivityDetailResponse`,
-not inside the plan.
+Read the cancellation policy from `activity.cancellation_policy`. The top-level
+`GetActivityDetailResponse.cancellation_policy` is deprecated and kept only for existing
+integrations. Either way it is per activity, not per plan.
 
 If you omit `language_code`, text fields come back populated for **every** available
 language in their `i18n_text` map. Passing a specific `language_code` narrows this and makes
@@ -97,8 +98,9 @@ supplier-currency figure.
 
 Holds inventory and returns a `session_id`. Nothing is sold yet.
 
-Required fields: `language_code`, `country_code`, `activity_id`, `plan_id`, `plan_item_id`,
-`plan_unit_items`, `display_currency_code`.
+Required fields: `language_code`, `activity_id`, `plan_id`, `plan_item_id`,
+`plan_unit_items`, `display_currency_code`. `country_code` is optional: it is the OTA's own
+country (omitted → `UNIVERSAL`), not the traveler's.
 
 `target_date` is required **unless** the plan's `confirmation_type` is
 `FREE_SALE_OPEN_DATE` — open-date products have no participation date to specify.
@@ -114,8 +116,8 @@ Separately, units with `can_be_book_independently: false` (typically children) c
 only thing in the basket.
 
 `language_code` must be one of the languages configured on the activity
-(`activity.language_codes`). If it isn't, the call fails with `InvalidArgument` and an
-`ErrorInfo` in `details[]` carrying `LANGUAGE_CODE`, `ALLOWED_LANGS` and `ACTIVITY_ID`.
+(`activity.language_codes`). If it isn't, the call fails with `INVALID_ARGUMENT` and
+`details[].metadata` carrying `LANGUAGE_CODE`, `ALLOWED_LANGS` and `ACTIVITY_ID`.
 This is a frequent first-integration failure.
 
 `participant_info` carries traveler details, shaped by the plan's `booking_form`. See
@@ -221,39 +223,48 @@ after an update.
 
 ## Cancellation (two-phase)
 
-`start-cancel-booking` takes `booking_id` and returns:
+`start-cancel-booking` takes `booking_id`. A 200 means the booking can be cancelled and a
+cancellation request now exists (or an open one was reused). It returns:
 
-- `cancel_check_code` — whether cancellation is permitted at all.
 - `cancel_refund_display` — the refund and fee breakdown in all three currencies, plus
   `refund_rule_type` and `cancel_at`.
 - `child_cancel_refund_display[]` — per-child breakdown, bundle bookings only.
 
-`cancel_check_code` values:
+A booking that cannot be cancelled is an HTTP error, not a 200. Branch on `error_code`:
 
-| Value | Meaning |
+| `error_code` | Meaning |
 | --- | --- |
-| `CAN_BE_CANCELLED` | Proceed to `final-cancel-booking`. |
-| `ALREADY_CANCELLED` | Nothing to do. Not an error condition to retry. |
-| `CAN_NOT_CANCEL` | Policy forbids it. Check `cancellation_policy` from `get-activity-detail`. |
-| `BOOKING_EXPIRED` | The voucher has passed its expiration. |
-| `SHOULD_DECLINE_INSTEAD_OF_CANCEL` | A `REQUEST` booking still pending review — decline it rather than cancel. |
+| `BOOKING_ALREADY_CANCELLED` | Already cancelled. Treat it as settled, don't retry. |
+| `CANCEL_DEADLINE_PASSED` | The voucher expiration time has passed. |
+| `BOOKING_ALREADY_ISSUED` | The voucher is redeemed in full or in part. |
+| `BOOKING_NOT_CANCELLABLE` | Status, cancellation policy, bulk/bundle constraint, or a bundle child forbids it. `message` tells the cases apart. |
+| `BOOKING_NOT_FOUND` | No booking matches `booking_id`. |
+
+`cancel_check_code` is deprecated: it is always `CAN_BE_CANCELLED` on a 200. Don't branch on it.
 
 Show the traveler the fee from `cancel_refund_display` and get their agreement **before**
-calling phase two. The quoted figure is indicative: the actual fee is always recomputed
-server-side at cancel time.
+calling phase two. Those are the amounts `final-cancel-booking` applies; if the fee changes
+in between, it fails with `CANCEL_REFUND_CHANGED` and the flow restarts at
+`start-cancel-booking`.
 
 `final-cancel-booking` requires `booking_id` and `cancel_by` (an identifier for whoever
 initiated it — a person's name or an operator ID). `cancel_reason` and `comment` are
 optional; `cancel_reason` is an enum, see `enums.md`.
 
-Its response is a `parent_result` plus `children_results[]` (empty for non-bundle
-bookings). Each result has a `status` of `CANCEL_SUCCEED`, `CANCEL_PENDING`, or
-`CANCEL_FAILED`, with `failed_reason` populated on failure.
+Read the top-level `booking_id` and `status` of its response. `status` is `CANCEL_SUCCEED`
+or `CANCEL_PENDING`; `CANCEL_FAILED` never appears in a 200 — a cancellation that did not go
+through is an HTTP error with a business `error_code` (e.g. `CANCEL_NOT_STARTED`,
+`CANCEL_REFUND_CHANGED`). `parent_result` is deprecated (still filled, same values), and
+`children_results` has been removed.
 
-**`CANCEL_PENDING` is not a failure.** Some suppliers cancel asynchronously. Poll
-`get-booking` until the booking status leaves `CANCEL_PENDING` and settles to
-`CANCELLED_BY_TRAVELER` or `CANCEL_FAILED`. Do not retry `final-cancel-booking` while it
-is pending — you risk double-cancellation handling on the supplier side.
+**`CANCEL_PENDING` is not a failure.** Some suppliers cancel asynchronously, some by hand.
+Call `final-cancel-booking` again later to pick up the result — it resumes the open request
+rather than cancelling twice.
+
+For a bundle parent, one child that cannot be cancelled fails the whole call with that
+child's error, and `details[].metadata.booking_id` names the child. Children already
+cancelled stay cancelled and the parent's request stays open: fix the cause, then call
+`final-cancel-booking` again.
 
 ## Booking status model
 

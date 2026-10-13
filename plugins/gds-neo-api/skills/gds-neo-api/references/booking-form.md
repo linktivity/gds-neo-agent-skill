@@ -391,8 +391,9 @@ the custom field, no `supplier_ticket_id`, no `unit_title`.
 
 ## Legacy fields
 
-`external.BookingForm` also carries these, all deprecated, all kept only for backward
-compatibility with existing OTA integrations:
+`external.BookingForm` also carries these. All are marked `deprecated: true` in the spec, kept
+only for backward compatibility with existing OTA integrations, and **to be removed in a future
+major version** — generated clients will flag them:
 
 `required_booking_fields[]`, `optional_booking_fields[]`, `voucher_hidden_fields[]`,
 `booking_details_hidden_fields[]` (all `BookingField.Id`);
@@ -407,7 +408,8 @@ and `custom_fields[]` of `CustomField`.
 The `voucher_hidden_*` and `booking_details_hidden_*` lists indicate fields that should be
 collected but **not displayed** on the voucher or the booking detail view respectively.
 There is no equivalent flag on the new `*_specs` objects, so if you rely on hiding
-behaviour you currently still need to read the legacy lists.
+behaviour you currently still need to read the legacy lists — and should ask Linktivity what
+replaces them before they are removed.
 
 Legacy `CustomField` is `{field_id, type, title, description, collecting_type, collecting_timing, choices[], hide_from_voucher}`
 — note `collecting_type` is `CustomField.CollectingType` (`PER_BOOKING` / `PER_PARTICIPANT`)

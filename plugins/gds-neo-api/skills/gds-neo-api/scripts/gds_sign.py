@@ -399,8 +399,8 @@ def cmd_call(args) -> int:
 
     if status >= 400:
         print(
-            "\nNon-2xx. For 401 see references/auth.md; otherwise read `details[]` in the "
-            "rpc.Status body — it usually names the offending field. "
+            "\nNon-2xx. For 401 see references/auth.md; otherwise branch on `error_code` "
+            "and read `details[].metadata` — it usually names the offending field. "
             "references/troubleshooting.md maps codes to causes.",
             file=sys.stderr,
         )

@@ -1,7 +1,7 @@
 # Endpoint reference
 
 All paths are relative to the environment base URL (see `auth.md`). All 14 operations
-require the five auth headers. Every operation returns `rpc.Status` for `4xx` and `5xx`.
+require the five auth headers. Every operation returns an `ErrorResponse` for `4xx` and `5xx` (see `troubleshooting.md`).
 
 Enum-typed parameters are listed by their enum name; the value lists are in `enums.md`.
 Every enum-typed **query parameter** in this API defaults to `UNDEFINED`, meaning
@@ -70,8 +70,8 @@ needed to book.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `activity` | `Activity` | Includes `plans[]` of `GetActivityDetailResponse.Plan`. |
-| `cancellation_policy` | `external.CancellationPolicy` | Top level, **not** per plan. |
+| `activity` | `Activity` | Includes `plans[]` of `GetActivityDetailResponse.Plan` and `cancellation_policy`. |
+| `cancellation_policy` | `external.CancellationPolicy` | **Deprecated** — read `activity.cancellation_policy` instead. Per activity, not per plan. |
 
 ---
 
@@ -147,8 +147,7 @@ Phase 1 of booking (Reserve). Returns a `session_id` required by `final-booking`
 
 | Field | Required | Type | Notes |
 | --- | --- | --- | --- |
-| `language_code` | **yes** | `Language` | Response and voucher language. **Must be one of the activity's configured languages** or the call fails with `InvalidArgument` + `ErrorInfo` carrying `LANGUAGE_CODE`, `ALLOWED_LANGS`, `ACTIVITY_ID`. |
-| `country_code` | **yes** | `CountryCode` | Traveler's country, ISO 3166-1 alpha-3. |
+| `language_code` | **yes** | `Language` | Response and voucher language. **Must be one of the activity's configured languages** or the call fails with `INVALID_ARGUMENT`, `details[].metadata` carrying `LANGUAGE_CODE`, `ALLOWED_LANGS`, `ACTIVITY_ID`. |
 | `activity_id` | **yes** | string | e.g. `LINKTIVITY-1QCOC`. |
 | `plan_id` | **yes** | string | e.g. `FUJIQHL-1QCOZ-1`. |
 | `plan_item_id` | **yes** | string | Start-time id, e.g. `LINKTIVITY-1QCOC-1-1`. |
@@ -159,6 +158,7 @@ Phase 1 of booking (Reserve). Returns a `session_id` required by `final-booking`
 | `agent_booking_id` | no | string | Your own reference. Filterable in `list-bookings`. |
 | `agent_reservation_note` | no | string | Free-text, your own use. |
 | `idempotent_key` | no | string | Max 64 chars; longer is rejected. Same key → same `session_id`. Effective 24 hours. |
+| `country_code` | no | `CountryCode` | The **OTA's own** country, ISO 3166-1 alpha-3; omitted → `UNIVERSAL`. Finance record only, not sent to the supplier. Not the traveler's country — that is `booking_representative_fields.participant_resident_region`. |
 
 ```json
 {
@@ -203,8 +203,8 @@ Phase 1 of booking (Reserve). Returns a `session_id` required by `final-booking`
 All pending reservation sessions for the current OTA account. No parameters.
 
 **Response** `ListReservationsResponse` → `sessions[]` of
-`ListReservationsResponse.BookingSession`, each with `session_id`, `expiry` (Unix seconds,
-int64 as string), `language_code`, `activity_id`, `plan_id`, `activity_title`, `plan_title`,
+`ListReservationsResponse.BookingSession`, each with `session_id`, `expiry` (RFC 3339,
+same value `start-booking` returned), `language_code`, `activity_id`, `plan_id`, `activity_title`, `plan_title`,
 `target_date`, `participant_last_name`, `participant_first_name`,
 `participant_email_address`, `agent_booking_id`.
 
@@ -281,17 +281,16 @@ Offset-paginated, filterable.
 | `booking_id` | **yes** | string | |
 | `participant_info` | **yes** | `ParticipantInfo` | **Completely overwrites** the existing participant information. Field-by-field breakdown in `booking-form.md`. |
 
-Spec quirk: the schema's `required` array lists `["id", "participant_info"]` while the
-declared property is `booking_id`. Send `booking_id` — that is the documented property, and
-the endpoint description refers to "booking `id`". If a generated client emits `id`, that
-is the cause.
+Send the **complete** `participant_info`: any field left out is cleared (only the
+per-participant `unit_title` is refilled by Linktivity). Sub-orders of a bulk booking cannot
+be updated.
 
 **Response** `UpdateBookingParticipantInfoResponse` → `voucher_urls` (refreshed after the
 change; re-issue vouchers).
 
 ### `POST /v1/booking/ota/start-cancel-booking` — StartCancelBooking
 
-Phase 1 of cancellation. Quotes, does not commit.
+Phase 1 of cancellation. Quotes and opens a cancellation request (or reuses an open one); does not commit. A booking that cannot be cancelled is an HTTP error with a business `error_code` — see `flow.md`.
 
 **Body** `StartCancelBookingRequest`
 
@@ -303,7 +302,7 @@ Phase 1 of cancellation. Quotes, does not commit.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `cancel_check_code` | `CancelCheckCode` | Gate on this before phase 2. |
+| `cancel_check_code` | `CancelCheckCode` | **Deprecated.** Always `CAN_BE_CANCELLED` on a 200; don't branch on it. |
 | `cancel_refund_display` | `external.CancelRefundDisplay` | Refund and fee in all three currencies. |
 | `child_cancel_refund_display[]` | `external.CancelRefundDisplay` | Bundle bookings only. |
 
@@ -333,9 +332,10 @@ Phase 2 of cancellation. Commits.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `parent_result` | `Result` | For non-bundle bookings this is the only result. |
-| `children_results[]` | `Result` | Empty for non-bundle bookings. |
+| `booking_id` | string | The booking the request was for (the parent, for a bundle). |
+| `status` | string | `CANCEL_SUCCEED` or `CANCEL_PENDING`. `CANCEL_FAILED` never appears in a 200. |
+| `parent_result` | `Result` | **Deprecated.** Same values as the top-level fields; will be removed. |
 
-`Result` is `{booking_id, status, failed_reason}` where `status` is `CANCEL_SUCCEED`,
-`CANCEL_PENDING`, or `CANCEL_FAILED`, and `failed_reason` appears only on failure.
-`CANCEL_PENDING` means poll `get-booking`; do not retry.
+A cancellation that did not go through is an HTTP error with a business `error_code`.
+`CANCEL_PENDING` means call `final-cancel-booking` again later to pick up the result.
+`children_results` has been removed.

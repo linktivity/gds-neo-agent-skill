@@ -1,6 +1,6 @@
 ---
 name: gds-neo-api
-description: Answer integration questions about the Linktivity GDS API (GDS-neo / open-agent), the OTA-facing API for searching Japanese travel activities, checking availability and prices, and creating, updating, or cancelling bookings. Use when the user asks how to authenticate or compute the signature-key header, what a request or response field means, which endpoint to call next, how to fill participant_info or booking_form fields, why they are getting a 401 / InvalidArgument / cancellation error, or how to work through the reserve-then-confirm booking flow. Use this skill whenever any of these appear - GDS API, GDS-neo, open-agent.gds-neo, Linktivity API, signature-key, ota-id, group-id, api-key-id, StartBooking, FinalBooking, StartCancelBooking, search-activities, get-activity-detail, plan_unit_items, plan_unit_id, booking_session_id, participant_info - even if the user does not name the API explicitly.
+description: Answer integration questions about the Linktivity GDS API (GDS-neo / open-agent), the OTA-facing API for searching Japanese travel activities, checking availability and prices, and creating, updating, or cancelling bookings. Use when the user asks how to authenticate or compute the signature-key header, what a request or response field means, which endpoint to call next, how to fill participant_info or booking_form fields, why they are getting a 401 / INVALID_ARGUMENT / error_code / cancellation error, or how to work through the reserve-then-confirm booking flow. Use this skill whenever any of these appear - GDS API, GDS-neo, open-agent.gds-neo, Linktivity API, signature-key, ota-id, group-id, api-key-id, StartBooking, FinalBooking, StartCancelBooking, search-activities, get-activity-detail, plan_unit_items, plan_unit_id, booking_session_id, participant_info - even if the user does not name the API explicitly.
 ---
 
 # Linktivity GDS API integration support
@@ -79,10 +79,12 @@ also removes the session from `ListReservations`, so check `ListBookings` by
 (pre-confirmation) and `booking_id` (post-confirmation) are different things and
 are not substitutable.
 
-**`4xx` and `5xx` responses are always a `rpc.Status`** — `{code, message, details[]}`
-where `code` is a numeric [google.rpc.Code](https://cloud.google.com/apis/design/errors)
-and `details[]` may carry an `ErrorInfo` with the specific offending field. Always read
-`details[]` before guessing; it usually names the field.
+**`4xx` and `5xx` responses are an `ErrorResponse`** —
+`{code, error_code, message, details[], retryable}`. Branch on `error_code` (a business code
+like `INSUFFICIENT_BALANCE`, or the gRPC code name), let `retryable` decide resends, and never
+parse `message`. `details[].metadata` carries `request_id` and, for validation errors, the
+offending `field`. Always read the whole body before guessing. Only auth rejections at the
+HTTP edge differ: `{"message": "..."}`.
 
 ## Endpoint map
 
@@ -109,8 +111,8 @@ Base path is on the host directly — there is no `basePath` prefix beyond `/v1`
 
 Ground every claim in the reference files. When you state a field name, use the exact
 snake_case name from the spec, and say whether it is required. When someone asks "why
-doesn't this work", ask for the response body — the `rpc.Status.details[]` almost always
-identifies the field, and guessing without it wastes their time.
+doesn't this work", ask for the response body — its `error_code` and `details[].metadata`
+almost always identify the problem, and guessing without them wastes their time.
 
 When a request body is involved, give them a complete, copy-pasteable JSON example with
 their values filled in, not a description of the shape. Keep the example minimal: required

@@ -55,7 +55,7 @@ EXPECTED_PATHS = [
 # Definitions the reference files make specific claims about. These sit late in the
 # document, so their presence is what proves the download was not truncated.
 EXPECTED_DEFINITIONS = [
-    "rpc.Status",
+    "ErrorResponse",
     "Activity",
     "GetActivityDetailResponse.Plan",
     "external.BookingForm",

@@ -375,7 +375,7 @@ communicating with the supplier.
 | Field | Type | Notes |
 | --- | --- | --- |
 | `session_id` | string | |
-| `expiry` | string (int64) | **Unix seconds**, as a string. Note `StartBookingResponse.expiry` is RFC 3339 instead — the same concept in two formats. 15-minute fallback if the adapter gives none. |
+| `expiry` | date-time | RFC 3339, the same value `StartBookingResponse.expiry` returned. 15-minute fallback if the adapter gives none. |
 | `language_code` | `Language` | |
 | `activity_id` / `plan_id` | string | |
 | `activity_title` / `plan_title` | string | Plain strings here. |
@@ -437,7 +437,7 @@ Do not use `unit_id` externally; `custom_id` is the value that corresponds to
 | `payment_currency_price` | `CancelRefundDisplay.Price` |
 | `display_currency_price` | `CancelRefundDisplay.Price` |
 | `refund_rule_type` | `RefundRuleType` |
-| `refund_failed_reason` | string |
+| `refund_failed_reason` | string — set only when `refund_rule_type` is `REFUND_FAILED`; don't parse it |
 | `cancel_at` | string (RFC 3339) |
 
 `CancelRefundDisplay.Price` extends the normal price with refund figures:
@@ -455,8 +455,10 @@ Refund your traveler from `gross_refund`; reconcile your own settlement from `ne
 
 ### `Result`
 
-`{booking_id, status, failed_reason}`. `status` ∈ `CANCEL_SUCCEED` / `CANCEL_PENDING` /
-`CANCEL_FAILED`; `failed_reason` only on failure.
+**Deprecated** (only used by the deprecated `FinalCancelBookingResponse.parent_result`).
+`{booking_id, status, failed_reason}`. On a 200, `status` is `CANCEL_SUCCEED` or
+`CANCEL_PENDING`; `failed_reason` is always null. Read the top-level fields of
+`FinalCancelBookingResponse` instead.
 
 ### `ParentBooking` (bundle products)
 
@@ -467,31 +469,27 @@ Caveat worth knowing: **no object in the published spec declares a field of this
 verified by searching the whole document for `#/definitions/ParentBooking`, which appears zero
 times. `external.BookingInfo` and `GetBookingResponse` have no `parent_booking` property. So
 the type is defined but genuinely unreachable through the documented responses. If you need
-parent/child linkage for bundles, the documented path is the other direction:
-`FinalCancelBookingResponse.children_results[]` on the parent. Ask Linktivity if you need the
-child→parent link.
+parent/child linkage for bundles, ask Linktivity — `FinalCancelBookingResponse.children_results[]`,
+which used to expose the children on the parent, has been removed.
 
 ---
 
 ## Errors
 
-### `rpc.Status`
+### `ErrorResponse`
 
-The body of every `4xx` and `5xx`.
+The body of every `4xx` and `5xx`. The one exception: requests rejected by the auth check at
+the HTTP edge return `{"message": "..."}` only.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `code` | int32 | A [google.rpc.Code](https://cloud.google.com/apis/design/errors) numeric value, **not** the HTTP status. |
-| `message` | string | Developer-facing, English. Not for end users. |
-| `details[]` | `protobuf.Any` | Structured detail. **Read this first when debugging.** |
+| `code` | int32 | Numeric gRPC status code, **not** the HTTP status (the HTTP status is derived from it). |
+| `error_code` | string | Never empty. A business code (e.g. `INSUFFICIENT_BALANCE`) when one applies, otherwise the gRPC code name (`INVALID_ARGUMENT`, ...). **Branch on this.** Unknown values: fall back to `code`. |
+| `message` | string | English, for logs. Wording may change — never parse it. |
+| `details[]` | `ErrorDetail` | Each entry is `{metadata: {string: string}}`: `request_id` plus the keys documented for the `error_code` (e.g. `field`, `constraint`, `booking_id`). No `@type`. |
+| `retryable` | boolean | Always present. Whether the **same** request may be resent as is. Authoritative over any per-code guidance. |
 
-### `protobuf.Any`
+The full list of business `error_code` values, with their HTTP status and metadata keys, is in
+the spec's `info.description` under **Errors**. `troubleshooting.md` summarises them.
 
-`{"@type": "...", ...}` — the `@type` URL identifies the payload type and the remaining keys
-are that type's fields, inlined. The one you will meet most is
-`type.googleapis.com/google.rpc.ErrorInfo`, which carries a `reason`, a `domain`, and a
-`metadata` map naming the offending field. `StartBooking` language validation, for example,
-returns `ErrorInfo` metadata with `LANGUAGE_CODE`, `ALLOWED_LANGS`, and `ACTIVITY_ID`.
-
-Log `details[]` verbatim. Discarding it and keeping only `message` is why most integration
-tickets start with "it just says invalid argument".
+Log the whole body verbatim. Quote `details[].metadata.request_id` when contacting support.

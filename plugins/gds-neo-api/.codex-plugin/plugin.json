@@ -1,7 +1,7 @@
 {
   "name": "gds-neo-api",
   "description": "Integration support for the Linktivity GDS API: authentication and signature debugging, endpoint and field reference, end-to-end booking flow, and error diagnosis.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": {
     "name": "Linktivity Inc.",
     "email": "info@linktivity.co.jp",
