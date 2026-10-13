@@ -23,9 +23,18 @@ jobs:
         with:
           python-version: '3.12'
 
+      # A missing expected definition is usually real drift (e.g. rpc.Status -> ErrorResponse),
+      # not truncation, so write the spec anyway and let the PR surface it. Invalid JSON still fails.
       - name: Fetch the published spec and validate it
         working-directory: plugins/gds-neo-api/skills/gds-neo-api
-        run: python3 scripts/fetch_spec.py --force
+        run: |
+          if ! python3 scripts/fetch_spec.py --force > "$RUNNER_TEMP/fetch.log"; then
+            cat "$RUNNER_TEMP/fetch.log"
+            curl -fsS https://linktivity.github.io/gds-neo-proto-public/apidoc/gds_api.swagger.json \
+              | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin), indent=2, ensure_ascii=False))' \
+              > assets/gds_api.swagger.json
+            { echo '## Validation failed'; echo '```'; cat "$RUNNER_TEMP/fetch.log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Summarise what changed
         id: diff
