@@ -83,7 +83,22 @@ jobs:
           print("- [ ] `references/endpoints.md`: new or changed parameters and required flags")
           print("- [ ] `references/enums.md`: new enum values")
           print("- [ ] `scripts/fetch_spec.py`: update `EXPECTED_PATHS` / `EXPECTED_DEFINITIONS`")
-          print("- [ ] Bump `version` in `plugins/gds-neo-api/.claude-plugin/plugin.json`")
+          PY
+
+      # The pre-commit hook that rebuilds dist/ never runs here, so do it before committing.
+      - name: Rebuild the packaged skill
+        if: steps.diff.outputs.changed == 'true'
+        run: scripts/package_skill.sh
+
+      # Installed plugins only pick up an update when the version changes.
+      - name: Bump the plugin patch version
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          python3 - <<'PY'
+          import re, pathlib
+          for f in ['plugins/gds-neo-api/.claude-plugin/plugin.json', 'plugins/gds-neo-api/.codex-plugin/plugin.json']:
+              p = pathlib.Path(f)
+              p.write_text(re.sub(r'("version": "\d+\.\d+\.)(\d+)', lambda m: m[1] + str(int(m[2]) + 1), p.read_text(), count=1))
           PY
 
       - name: Open a pull request
