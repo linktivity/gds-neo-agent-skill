@@ -1,7 +1,7 @@
 {
   "info": {
     "title": "Linktivity GDS API",
-    "description": "# Introduction\nThe GDS API are interfaces to allow you to access our system using your OTA account. We provide a number of functions divided into these categories:\n\n  - [Partner](#tag/Partner) - Get a list of suppliers and OTAs. \n  - [Activity](#tag/Activity) - Search activities and get detailed activity information. \n  - [Availability](#tag/Availability) - Get availability calendar and check availability for a request date.\n  - [Booking](#tag/Booking) - Create, modify, cancel a booking.\n\n> Using an AI coding agent to integrate? Install the [GDS API agent skill](https://github.com/linktivity/gds-neo-agent-skill) for signature debugging, endpoint reference, and booking-flow guidance grounded in this spec.\n\n# Authentication\nThe GDS API uses API Key Authentication. This request authentication method require 5 custom headers:\n  - `timestamp`\n  - `ota-id`\n  - `group-id`\n  - `api-key-id`\n  - `signature-key`\n\n## Signature Algorithm\n\n`signature-key` is a chained **HMAC-SHA256** over your secret API key, the request `timestamp`, the request `host`, and the request `path`, finalised with a fixed salt, then base64-url encoded (with `=` padding).\n\n```\nk1 = HMAC-SHA256( key = \"congaree\" + apiKeySecret, msg = timestamp )\nk2 = HMAC-SHA256( key = k1,                         msg = host      )\nk3 = HMAC-SHA256( key = k2,                         msg = path      )\nk  = HMAC-SHA256( key = k3,                         msg = \"veltra\"  )\nsignatureKey = base64url(k)        # keep '=' padding\n```\n\nInputs:\n\n| Name | Source |\n| --- | --- |\n| `apiKeySecret` | The secret paired with your `api-key-id` (out-of-band issued) |\n| `timestamp` | Same value as the `timestamp` header, e.g. `20260521T063324Z` |\n| `host` | Request host, e.g. `open-agent.gds-neo.link-dev.link` |\n| `path` | Request path only, e.g. `/v1/activity/search-activities` (no query string, no fragment) |\n\n### Reference implementation\n\n```go\nfunc signatureKey(apiKeySecret, timestamp, host, path string) string {\n    h := func(key, msg []byte) []byte {\n        m := hmac.New(sha256.New, key)\n        m.Write(msg)\n        return m.Sum(nil)\n    }\n    k1 := h([]byte(\"congaree\"+apiKeySecret), []byte(timestamp))\n    k2 := h(k1, []byte(host))\n    k3 := h(k2, []byte(path))\n    k  := h(k3, []byte(\"veltra\"))\n    return base64.URLEncoding.EncodeToString(k)\n}\n```\n\n## Client snippets\n\nSelf-contained, runnable examples in several languages.\n\n**JavaScript (Postman pre-request)**\n\n```js\n// Postman pre-request script.\n// Sets the `timestamp` and `signature-key` headers for GDS API requests.\n\nconst apiKey = \"YOUR_API_KEY\";\n\n// Resolve Postman variables; strip any scheme from host, normalize path.\nconst host = pm.variables.replaceIn(pm.request.url.getHost()).replace(/^https?:\\/\\//i, \"\");\nconst path = pm.variables.replaceIn(\"/\" + pm.request.url.getPath()).replace(/\\/+/g, \"/\");\n\n// UTC timestamp in YYYYMMDDTHHMMSSZ format.\nconst timestamp = new Date().toISOString().replace(/[-:]|\\.\\d+/g, \"\");\n\n// Chained HMAC-SHA256.\nconst hmac = (key, msg) => CryptoJS.HmacSHA256(msg, key);\nconst k1 = hmac(\"congaree\" + apiKey, timestamp);\nconst k2 = hmac(k1, host);\nconst k3 = hmac(k2, path);\nconst k  = hmac(k3, \"veltra\");\n\n// Base64 URL-safe encoding. Keep the \"=\" padding; the server requires it.\nconst signature = CryptoJS.enc.Base64.stringify(k)\n    .replace(/\\+/g, \"-\")\n    .replace(/\\//g, \"_\");\n\npm.request.headers.upsert({ key: \"timestamp\",     value: timestamp });\npm.request.headers.upsert({ key: \"signature-key\", value: signature });\n```\n\n**Go**\n\n```go\npackage main\n\nimport (\n    \"crypto/hmac\"\n    \"crypto/sha256\"\n    \"encoding/base64\"\n    \"fmt\"\n    \"io\"\n    \"net/http\"\n    \"time\"\n)\n\n// Compute the `signature-key` header value for a GDS API request.\n// The algorithm chains HMAC-SHA256 four times, then base64-URL encodes the result.\nfunc signatureKey(apiKey, timestamp, host, path string) string {\n    hmacSHA256 := func(key, msg []byte) []byte {\n        h := hmac.New(sha256.New, key)\n        h.Write(msg)\n        return h.Sum(nil)\n    }\n    k1 := hmacSHA256([]byte(\"congaree\"+apiKey), []byte(timestamp))\n    k2 := hmacSHA256(k1, []byte(host))\n    k3 := hmacSHA256(k2, []byte(path))\n    k  := hmacSHA256(k3, []byte(\"veltra\"))\n    // Keep the \"=\" padding; the server requires it.\n    return base64.URLEncoding.EncodeToString(k)\n}\n\nfunc main() {\n    const (\n        apiKey = \"YOUR_API_KEY\"\n        host   = \"open-agent.gds-neo.link-dev.link\"\n        path   = \"/v1/activity/search-activities\"\n    )\n    timestamp := time.Now().UTC().Format(\"20060102T150405Z\")\n    sig := signatureKey(apiKey, timestamp, host, path)\n\n    req, _ := http.NewRequest(\"GET\", \"https://\"+host+path+\"?page_size=20\", nil)\n    req.Header.Set(\"ota-id\", \"LINKTIVITY\")\n    req.Header.Set(\"group-id\", \"[default-group]:LINKTIVITY\")\n    req.Header.Set(\"api-key-id\", \"VJgSBDVXXXXXXXXX\")\n    req.Header.Set(\"timestamp\", timestamp)\n    req.Header.Set(\"signature-key\", sig)\n\n    resp, err := http.DefaultClient.Do(req)\n    if err != nil {\n        panic(err)\n    }\n    defer resp.Body.Close()\n    body, _ := io.ReadAll(resp.Body)\n    fmt.Println(string(body))\n}\n```\n\n**Python**\n\n```python\nimport base64\nimport hashlib\nimport hmac\nimport time\nimport urllib.request\n\nAPI_KEY = \"YOUR_API_KEY\"\nHOST    = \"open-agent.gds-neo.link-dev.link\"\nPATH    = \"/v1/activity/search-activities\"\n\n\ndef signature_key(api_key: str, timestamp: str, host: str, path: str) -> str:\n    \"\"\"Compute the `signature-key` header value for a GDS API request.\"\"\"\n    def hmac_sha256(key: bytes, msg: bytes) -> bytes:\n        return hmac.new(key, msg, hashlib.sha256).digest()\n\n    k1 = hmac_sha256(b\"congaree\" + api_key.encode(), timestamp.encode())\n    k2 = hmac_sha256(k1, host.encode())\n    k3 = hmac_sha256(k2, path.encode())\n    k  = hmac_sha256(k3, b\"veltra\")\n    # Keep the \"=\" padding; the server requires it.\n    return base64.urlsafe_b64encode(k).decode()\n\n\ndef main():\n    timestamp = time.strftime(\"%Y%m%dT%H%M%SZ\", time.gmtime())\n    sig = signature_key(API_KEY, timestamp, HOST, PATH)\n\n    req = urllib.request.Request(\n        f\"https://{HOST}{PATH}?page_size=20\",\n        headers={\n            \"ota-id\":        \"LINKTIVITY\",\n            \"group-id\":      \"[default-group]:LINKTIVITY\",\n            \"api-key-id\":    \"VJgSBDVXXXXXXXXX\",\n            \"timestamp\":     timestamp,\n            \"signature-key\": sig,\n        },\n    )\n    with urllib.request.urlopen(req) as resp:\n        print(resp.read().decode())\n\n\nif __name__ == \"__main__\":\n    main()\n```\n\n**Java**\n\n```java\nimport java.net.URI;\nimport java.net.http.HttpClient;\nimport java.net.http.HttpRequest;\nimport java.net.http.HttpResponse;\nimport java.nio.charset.StandardCharsets;\nimport java.time.Instant;\nimport java.time.ZoneOffset;\nimport java.time.format.DateTimeFormatter;\nimport java.util.Base64;\nimport javax.crypto.Mac;\nimport javax.crypto.spec.SecretKeySpec;\n\npublic class SignatureExample {\n    private static final String API_KEY = \"YOUR_API_KEY\";\n    private static final String HOST    = \"open-agent.gds-neo.link-dev.link\";\n    private static final String PATH    = \"/v1/activity/search-activities\";\n\n    /** Compute the `signature-key` header value for a GDS API request. */\n    static String signatureKey(String apiKey, String timestamp, String host, String path) throws Exception {\n        byte[] k1 = hmacSha256((\"congaree\" + apiKey).getBytes(StandardCharsets.UTF_8), timestamp.getBytes(StandardCharsets.UTF_8));\n        byte[] k2 = hmacSha256(k1, host.getBytes(StandardCharsets.UTF_8));\n        byte[] k3 = hmacSha256(k2, path.getBytes(StandardCharsets.UTF_8));\n        byte[] k  = hmacSha256(k3, \"veltra\".getBytes(StandardCharsets.UTF_8));\n        // Keep the \"=\" padding; the server requires it.\n        return Base64.getUrlEncoder().encodeToString(k);\n    }\n\n    private static byte[] hmacSha256(byte[] key, byte[] msg) throws Exception {\n        Mac mac = Mac.getInstance(\"HmacSHA256\");\n        mac.init(new SecretKeySpec(key, \"HmacSHA256\"));\n        return mac.doFinal(msg);\n    }\n\n    public static void main(String[] args) throws Exception {\n        String timestamp = DateTimeFormatter.ofPattern(\"yyyyMMdd'T'HHmmss'Z'\").withZone(ZoneOffset.UTC).format(Instant.now());\n        String sig = signatureKey(API_KEY, timestamp, HOST, PATH);\n\n        HttpRequest req = HttpRequest.newBuilder()\n            .uri(URI.create(\"https://\" + HOST + PATH + \"?page_size=20\"))\n            .header(\"ota-id\", \"LINKTIVITY\")\n            .header(\"group-id\", \"[default-group]:LINKTIVITY\")\n            .header(\"api-key-id\", \"VJgSBDVXXXXXXXXX\")\n            .header(\"timestamp\", timestamp)\n            .header(\"signature-key\", sig)\n            .GET()\n            .build();\n\n        HttpResponse<String> resp = HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());\n        System.out.println(resp.body());\n    }\n}\n```\n\n**PHP**\n\n```php\n<?php\n$apiKey = 'YOUR_API_KEY';\n$host   = 'open-agent.gds-neo.link-dev.link';\n$path   = '/v1/activity/search-activities';\n\n/**\n * Compute the `signature-key` header value for a GDS API request.\n */\nfunction signatureKey(string $apiKey, string $timestamp, string $host, string $path): string {\n    $hmacSha256 = fn($key, $msg) => hash_hmac('sha256', $msg, $key, true);\n\n    $k1 = $hmacSha256('congaree' . $apiKey, $timestamp);\n    $k2 = $hmacSha256($k1, $host);\n    $k3 = $hmacSha256($k2, $path);\n    $k  = $hmacSha256($k3, 'veltra');\n\n    // URL-safe base64; keep the \"=\" padding (server requires it).\n    return strtr(base64_encode($k), '+/', '-_');\n}\n\n$timestamp = gmdate('Ymd\\THis\\Z');\n$sig = signatureKey($apiKey, $timestamp, $host, $path);\n\n$ch = curl_init(\"https://{$host}{$path}?page_size=20\");\ncurl_setopt($ch, CURLOPT_HTTPHEADER, [\n    \"ota-id: LINKTIVITY\",\n    \"group-id: [default-group]:LINKTIVITY\",\n    \"api-key-id: VJgSBDVXXXXXXXXX\",\n    \"timestamp: {$timestamp}\",\n    \"signature-key: {$sig}\",\n]);\ncurl_setopt($ch, CURLOPT_RETURNTRANSFER, true);\necho curl_exec($ch);\ncurl_close($ch);\n```\n\n### End-to-end curl example\n\nA canonical request with all 5 headers filled in:\n\n```bash\ncurl https://open-agent.gds-neo.link-dev.link/v1/activity/search-activities?page_size=20 \\\n  --header 'ota-id: LINKTIVITY' \\\n  --header 'group-id: [default-group]:LINKTIVITY' \\\n  --header 'api-key-id: VJgSBDVxxxxxxxxx' \\\n  --header 'timestamp: 20260521T063324Z' \\\n  --header 'signature-key: 3gjtSDLmvsr4M6RdQ9vY5sYPZ1Y7iV...='\n```\n\n### Common errors\n\n| HTTP | Cause |\n| --- | --- |\n| `401 invalid api-key-id` | `api-key-id` header missing or unknown |\n| `401 invalid signature` | HMAC mismatch — check `host` / `path` exactly match the request line, and `timestamp` is the same string in header and HMAC input |\n| `401 timestamp out of range` | Server clock differs from `timestamp` by more than ±5 minutes; sync your clock to NTP |\n\n# Errors\nA failed request returns an HTTP status derived from a gRPC status code, with this JSON body:\n\n```json\n{\n  \"code\": 9,\n  \"error_code\": \"BOOKING_ADAPTER_BOOKING_NO_AVAILABILITY\",\n  \"message\": \"booking adapter error\",\n  \"details\": [\n    {\n      \"metadata\": {\n        \"booking_adapter_error_code\": \"2004\",\n        \"request_id\": \"e9c30653-eafa-4169-a08e-9e28748adb69\"\n      }\n    }\n  ],\n  \"retryable\": false\n}\n```\n\n| Field | Meaning |\n| --- | --- |\n| `code` | The numeric gRPC status code. The HTTP status derives from it, except that a request using an HTTP method the path does not accept gets HTTP 405 with `code` 12. |\n| `error_code` | The machine-readable error code; never empty. A business code from the table below when one applies, otherwise the name of the gRPC status code (`INVALID_ARGUMENT`, `NOT_FOUND`, `INTERNAL`, ...). Branch on this field. New values may be added at any time: handle a value you do not know by its `code`. |\n| `message` | English text for logs and support tickets. Its wording may change between releases; do not parse it. 4xx responses, and 5xx responses with a business `error_code`, carry text written for the error; any other 5xx carries only the HTTP status text (for example `Internal Server Error`), so quote `request_id` when you contact support. |\n| `details[].metadata` | Context for the error, such as `request_id` and details of the error. |\n| `retryable` | `true`: the same request may be resent as is, after a short wait. `false`: do not resend it as is; act on `error_code`. |\n\nRequests rejected by the authentication check at the HTTP edge are the one exception to this shape: they return `{\"message\": \"...\"}` only.\n\ngRPC status codes. When no business code applies, `error_code` is the name of the gRPC status code and `code` its number:\n\n| error_code | code | HTTP | Meaning | retryable |\n| --- | --- | --- | --- | --- |\n| <a id=\"err-INVALID_ARGUMENT\"></a>`INVALID_ARGUMENT` | 3 | 400 | The request is invalid regardless of system state: the body is not valid JSON, or a field fails validation without a more specific code. | false |\n| <a id=\"err-DEADLINE_EXCEEDED\"></a>`DEADLINE_EXCEEDED` | 4 | 504 | The request passed the 30 second server limit. The outcome is unknown: read the endpoint's description for how to find out. | true |\n| <a id=\"err-NOT_FOUND\"></a>`NOT_FOUND` | 5 | 404 | The requested entity does not exist and no more specific code applies. | false |\n| <a id=\"err-PERMISSION_DENIED\"></a>`PERMISSION_DENIED` | 7 | 403 | The entity exists but belongs to another OTA or OTA group. | false |\n| <a id=\"err-RESOURCE_EXHAUSTED\"></a>`RESOURCE_EXHAUSTED` | 8 | 429 | A quota or rate limit was exceeded. Resend with backoff. | true |\n| <a id=\"err-FAILED_PRECONDITION\"></a>`FAILED_PRECONDITION` | 9 | 400 | The system is not in the state the operation requires and no more specific code applies; the endpoint's description names the cases. | false |\n| <a id=\"err-ABORTED\"></a>`ABORTED` | 10 | 409 | Another request is operating on the same entity (a booking session, a booking, or its bundle). Resend after a few seconds. | true |\n| <a id=\"err-UNIMPLEMENTED\"></a>`UNIMPLEMENTED` | 12 | 405 | The path does not accept the HTTP method used. | false |\n| <a id=\"err-INTERNAL\"></a>`INTERNAL` | 13 | 500 | Internal error. `message` is `Internal Server Error`; quote `request_id` when you contact support. | false |\n| <a id=\"err-UNAVAILABLE\"></a>`UNAVAILABLE` | 14 | 503 | A service the request depends on is unreachable. `message` is `Service Unavailable`. | true |\n| <a id=\"err-UNAUTHENTICATED\"></a>`UNAUTHENTICATED` | 16 | 401 | An authentication header is missing, the signature does not match, or `timestamp` is out of range. See **Authentication**. | false |\n\nBusiness error codes, by category:\n\n**Common errors**\n\nCan be returned by any endpoint.\n\n| error_code | HTTP | Meaning | metadata |\n| --- | --- | --- | --- |\n| <a id=\"err-VALIDATION_FAILED\"></a>`VALIDATION_FAILED` | 400 | A request field failed validation. One `details` entry per field. | `field`, `constraint` |\n\n**Booking errors**\n\n| error_code | HTTP | Meaning | metadata |\n| --- | --- | --- | --- |\n| <a id=\"err-BOOKING_REQUIRED_INFO_MISSING\"></a>`BOOKING_REQUIRED_INFO_MISSING` | 400 | StartBooking: a required participant or booking field is missing or malformed. One `details` entry per field. | `field`, `constraint` |\n| <a id=\"err-BOOKING_INVALID_FORM_RESPONSE\"></a>`BOOKING_INVALID_FORM_RESPONSE` | 400 | StartBooking: a custom reservation form response is missing or invalid. One `details` entry per response. | `field`, `constraint` |\n| <a id=\"err-BOOKING_NOT_FOUND\"></a>`BOOKING_NOT_FOUND` | 404 | StartCancelBooking, FinalCancelBooking: no booking matches `booking_id`. | `booking_id` |\n| <a id=\"err-BOOKING_ALREADY_CANCELLED\"></a>`BOOKING_ALREADY_CANCELLED` | 400 | StartCancelBooking, FinalCancelBooking: the booking is already cancelled. Treat it as settled. | `booking_id` |\n| <a id=\"err-CANCEL_DEADLINE_PASSED\"></a>`CANCEL_DEADLINE_PASSED` | 400 | StartCancelBooking, FinalCancelBooking: the voucher expiration time has passed. | `booking_id`, `deadline` |\n| <a id=\"err-BOOKING_ALREADY_ISSUED\"></a>`BOOKING_ALREADY_ISSUED` | 400 | StartCancelBooking, FinalCancelBooking: the voucher is redeemed in full or in part. | `booking_id` |\n| <a id=\"err-BOOKING_NOT_CANCELLABLE\"></a>`BOOKING_NOT_CANCELLABLE` | 400 | StartCancelBooking, FinalCancelBooking: the booking status, the cancellation policy in effect, a bulk or bundle constraint, or one child of the bundle forbids cancellation. `message` tells the cases apart. | `booking_id` (for a bundle, the child that blocks the cancellation) |\n| <a id=\"err-CANCEL_NOT_STARTED\"></a>`CANCEL_NOT_STARTED` | 400 | FinalCancelBooking: the booking has no open cancellation request. Call StartCancelBooking first. | `booking_id` |\n| <a id=\"err-CANCEL_REFUND_CHANGED\"></a>`CANCEL_REFUND_CHANGED` | 400 | FinalCancelBooking: the refund amounts changed since StartCancelBooking, so that request is voided. Call StartCancelBooking again to get the current amounts. | `booking_id` |\n\n**Finance errors**\n\n| error_code | HTTP | Meaning | metadata |\n| --- | --- | --- | --- |\n| <a id=\"err-INSUFFICIENT_BALANCE\"></a>`INSUFFICIENT_BALANCE` | 400 | StartBooking, or FinalBooking before the booking is placed with the supplier: the wallet balance does not cover the booking. Nothing is booked: top up, then call StartBooking again, or resend FinalBooking with the same booking session. `retryable` is `false`. | |\n| `INSUFFICIENT_BALANCE` | 503 | FinalBooking, after the booking is placed with the supplier: the wallet balance is insufficient. The booking is held, not failed: top up, then resend FinalBooking with the same booking session. Do not create a new booking. `retryable` is `true`. | |\n\n**Supplier errors**\n\nReturned when the supplier system behind the booking rejects or fails the operation.\n\n| error_code | HTTP | Meaning | metadata |\n| --- | --- | --- | --- |\n| <a id=\"err-BOOKING_ADAPTER_INVALID_ARGUMENT\"></a>`BOOKING_ADAPTER_INVALID_ARGUMENT` | 400 | The supplier rejected a request parameter. | |\n| <a id=\"err-BOOKING_ADAPTER_ARGUMENT_MISSING\"></a>`BOOKING_ADAPTER_ARGUMENT_MISSING` | 400 | A parameter the supplier requires is missing. | `field` (when known) |\n| <a id=\"err-BOOKING_ADAPTER_INTERNAL\"></a>`BOOKING_ADAPTER_INTERNAL` | 500 | The supplier connection failed in a way it could not classify. The outcome is unknown: do not assume the supplier did not act. | |\n| <a id=\"err-BOOKING_ADAPTER_UNIMPLEMENTED\"></a>`BOOKING_ADAPTER_UNIMPLEMENTED` | 501 | The operation is not supported for this supplier. | |\n| <a id=\"err-BOOKING_ADAPTER_EXTERNAL_PENDING\"></a>`BOOKING_ADAPTER_EXTERNAL_PENDING` | 503 | The supplier is still processing the operation. Do not treat it as failed; resend later. `retryable` is `true`. | |\n| <a id=\"err-BOOKING_ADAPTER_EXTERNAL_FAILED\"></a>`BOOKING_ADAPTER_EXTERNAL_FAILED` | 400 | The supplier rejected the operation. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_NOT_ENOUGH_ALLOTMENT\"></a>`BOOKING_ADAPTER_BOOKING_NOT_ENOUGH_ALLOTMENT` | 400 | The supplier does not have enough stock for the requested quantity. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_NO_AVAILABILITY\"></a>`BOOKING_ADAPTER_BOOKING_NO_AVAILABILITY` | 400 | The supplier has no availability for the requested date or session. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_CAPACITY_CONSTRAINT\"></a>`BOOKING_ADAPTER_BOOKING_CAPACITY_CONSTRAINT` | 400 | The supplier rejected the ordered quantity. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_DEADLINE_PASSED\"></a>`BOOKING_ADAPTER_BOOKING_DEADLINE_PASSED` | 400 | The supplier's booking or cancellation deadline has passed. | |\n| <a id=\"err-BOOKING_ADAPTER_EXTERNAL_OUT_OF_SERVICE\"></a>`BOOKING_ADAPTER_EXTERNAL_OUT_OF_SERVICE` | 503 | The supplier system is under maintenance. Resend later. `retryable` is `true`. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_NOT_FOUND\"></a>`BOOKING_ADAPTER_BOOKING_NOT_FOUND` | 404 | The supplier does not know the booking. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_NOT_CANCELLABLE\"></a>`BOOKING_ADAPTER_BOOKING_NOT_CANCELLABLE` | 400 | The supplier refuses to cancel the booking. | |\n\nFor every `BOOKING_ADAPTER_*` code, `message` is the fixed text `booking adapter error`: the supplier's own wording is not returned, so tell the cases apart by `error_code`. These responses also carry `booking_adapter_error_code`, a legacy number kept for existing integrations. It will be removed; branch on `error_code` instead.\n\n# Recommended Reservation Flow\n[![Recommended flow to make bookings](https://mermaid.ink/img/pako:eNqNk0Fv2kAQhf_KaA_tJT70iqpIxBiEgozUuJVajKrBO8CI9S5dzxIRxH_vGgK12iSNT9bqvW_mPa8PqnKaVE8tjXus1ugFikFpIT79Wd9CaMgDWyGrQRxsg4-ihj4v_O3SeUALuEM2uDAEGoXAXU54YVj2UKGJXvRzSBJ4ZFmDpoY9afgV0Eor-XB2Jskt3B1KlaIxMBnn98X427j43o5akSTPczhSmZqEreYd64CmVMfzwnftiOn9CZS-DGokJkwWzm3Yrq7GtGPMorHADQHC1lOCQdbO8xMKO3tJ3ZbysYEqpmCJCb2-orIOavjyDku2aPiJ_llj2PGO_qxR4VaCp3cMH3UAg2mezUr1EKqKmqY1n1Zpm3yem2iSWGkDLXXnQrUmX6p5p8t8dK4kH_wcfpoN--PJ1y_ZvNNZ5n30vqrJ_gcZvgNy0hRckwtyrrUT9i3434J0mhf9tIilpM4KVgITthuJt0j2Mbe6UTX5GlnHv-HQIkola6qpVL34qmmJwUipSnuM0ngv3MPeVqonPtCNCtv2Dg8YVx5r1Vuiaa6nWfxQzl-UW7Q_nLtojr8BUdgXWw?type=png)](https://mermaid.live/edit#pako:eNqNk0Fv2kAQhf_KaA_tJT70iqpIxBiEgozUuJVajKrBO8CI9S5dzxIRxH_vGgK12iSNT9bqvW_mPa8PqnKaVE8tjXus1ugFikFpIT79Wd9CaMgDWyGrQRxsg4-ihj4v_O3SeUALuEM2uDAEGoXAXU54YVj2UKGJXvRzSBJ4ZFmDpoY9afgV0Eor-XB2Jskt3B1KlaIxMBnn98X427j43o5akSTPczhSmZqEreYd64CmVMfzwnftiOn9CZS-DGokJkwWzm3Yrq7GtGPMorHADQHC1lOCQdbO8xMKO3tJ3ZbysYEqpmCJCb2-orIOavjyDku2aPiJ_llj2PGO_qxR4VaCp3cMH3UAg2mezUr1EKqKmqY1n1Zpm3yem2iSWGkDLXXnQrUmX6p5p8t8dK4kH_wcfpoN--PJ1y_ZvNNZ5n30vqrJ_gcZvgNy0hRckwtyrrUT9i3434J0mhf9tIilpM4KVgITthuJt0j2Mbe6UTX5GlnHv-HQIkola6qpVL34qmmJwUipSnuM0ngv3MPeVqonPtCNCtv2Dg8YVx5r1Vuiaa6nWfxQzl-UW7Q_nLtojr8BUdgXWw)\n\n",
+    "description": "# Introduction\nThe GDS API are interfaces to allow you to access our system using your OTA account. We provide a number of functions divided into these categories:\n\n  - [Partner](#tag/Partner) - Get a list of suppliers and OTAs. \n  - [Activity](#tag/Activity) - Search activities and get detailed activity information. \n  - [Availability](#tag/Availability) - Get availability calendar and check availability for a request date.\n  - [Booking](#tag/Booking) - Create, modify, cancel a booking.\n\n> Using an AI coding agent to integrate? Install the [GDS API agent skill](https://github.com/linktivity/gds-neo-agent-skill) for signature debugging, endpoint reference, and booking-flow guidance grounded in this spec.\n\n# Authentication\nThe GDS API uses API Key Authentication. This request authentication method require 5 custom headers:\n  - `timestamp`\n  - `ota-id`\n  - `group-id`\n  - `api-key-id`\n  - `signature-key`\n\n## Signature Algorithm\n\n`signature-key` is a chained **HMAC-SHA256** over your secret API key, the request `timestamp`, the request `host`, and the request `path`, finalised with a fixed salt, then base64-url encoded (with `=` padding).\n\n```\nk1 = HMAC-SHA256( key = \"congaree\" + apiKeySecret, msg = timestamp )\nk2 = HMAC-SHA256( key = k1,                         msg = host      )\nk3 = HMAC-SHA256( key = k2,                         msg = path      )\nk  = HMAC-SHA256( key = k3,                         msg = \"veltra\"  )\nsignatureKey = base64url(k)        # keep '=' padding\n```\n\nInputs:\n\n| Name | Source |\n| --- | --- |\n| `apiKeySecret` | The secret paired with your `api-key-id` (out-of-band issued) |\n| `timestamp` | Same value as the `timestamp` header, e.g. `20260521T063324Z` |\n| `host` | Request host, e.g. `open-agent.gds-neo.link-dev.link` |\n| `path` | Request path only, e.g. `/v1/activity/search-activities` (no query string, no fragment) |\n\n### Reference implementation\n\n```go\nfunc signatureKey(apiKeySecret, timestamp, host, path string) string {\n    h := func(key, msg []byte) []byte {\n        m := hmac.New(sha256.New, key)\n        m.Write(msg)\n        return m.Sum(nil)\n    }\n    k1 := h([]byte(\"congaree\"+apiKeySecret), []byte(timestamp))\n    k2 := h(k1, []byte(host))\n    k3 := h(k2, []byte(path))\n    k  := h(k3, []byte(\"veltra\"))\n    return base64.URLEncoding.EncodeToString(k)\n}\n```\n\n## Client snippets\n\nSelf-contained, runnable examples in several languages.\n\n**JavaScript (Postman pre-request)**\n\n```js\n// Postman pre-request script.\n// Sets the `timestamp` and `signature-key` headers for GDS API requests.\n\nconst apiKey = \"YOUR_API_KEY\";\n\n// Resolve Postman variables; strip any scheme from host, normalize path.\nconst host = pm.variables.replaceIn(pm.request.url.getHost()).replace(/^https?:\\/\\//i, \"\");\nconst path = pm.variables.replaceIn(\"/\" + pm.request.url.getPath()).replace(/\\/+/g, \"/\");\n\n// UTC timestamp in YYYYMMDDTHHMMSSZ format.\nconst timestamp = new Date().toISOString().replace(/[-:]|\\.\\d+/g, \"\");\n\n// Chained HMAC-SHA256.\nconst hmac = (key, msg) => CryptoJS.HmacSHA256(msg, key);\nconst k1 = hmac(\"congaree\" + apiKey, timestamp);\nconst k2 = hmac(k1, host);\nconst k3 = hmac(k2, path);\nconst k  = hmac(k3, \"veltra\");\n\n// Base64 URL-safe encoding. Keep the \"=\" padding; the server requires it.\nconst signature = CryptoJS.enc.Base64.stringify(k)\n    .replace(/\\+/g, \"-\")\n    .replace(/\\//g, \"_\");\n\npm.request.headers.upsert({ key: \"timestamp\",     value: timestamp });\npm.request.headers.upsert({ key: \"signature-key\", value: signature });\n```\n\n**Go**\n\n```go\npackage main\n\nimport (\n    \"crypto/hmac\"\n    \"crypto/sha256\"\n    \"encoding/base64\"\n    \"fmt\"\n    \"io\"\n    \"net/http\"\n    \"time\"\n)\n\n// Compute the `signature-key` header value for a GDS API request.\n// The algorithm chains HMAC-SHA256 four times, then base64-URL encodes the result.\nfunc signatureKey(apiKey, timestamp, host, path string) string {\n    hmacSHA256 := func(key, msg []byte) []byte {\n        h := hmac.New(sha256.New, key)\n        h.Write(msg)\n        return h.Sum(nil)\n    }\n    k1 := hmacSHA256([]byte(\"congaree\"+apiKey), []byte(timestamp))\n    k2 := hmacSHA256(k1, []byte(host))\n    k3 := hmacSHA256(k2, []byte(path))\n    k  := hmacSHA256(k3, []byte(\"veltra\"))\n    // Keep the \"=\" padding; the server requires it.\n    return base64.URLEncoding.EncodeToString(k)\n}\n\nfunc main() {\n    const (\n        apiKey = \"YOUR_API_KEY\"\n        host   = \"open-agent.gds-neo.link-dev.link\"\n        path   = \"/v1/activity/search-activities\"\n    )\n    timestamp := time.Now().UTC().Format(\"20060102T150405Z\")\n    sig := signatureKey(apiKey, timestamp, host, path)\n\n    req, _ := http.NewRequest(\"GET\", \"https://\"+host+path+\"?page_size=20\", nil)\n    req.Header.Set(\"ota-id\", \"LINKTIVITY\")\n    req.Header.Set(\"group-id\", \"[default-group]:LINKTIVITY\")\n    req.Header.Set(\"api-key-id\", \"VJgSBDVXXXXXXXXX\")\n    req.Header.Set(\"timestamp\", timestamp)\n    req.Header.Set(\"signature-key\", sig)\n\n    resp, err := http.DefaultClient.Do(req)\n    if err != nil {\n        panic(err)\n    }\n    defer resp.Body.Close()\n    body, _ := io.ReadAll(resp.Body)\n    fmt.Println(string(body))\n}\n```\n\n**Python**\n\n```python\nimport base64\nimport hashlib\nimport hmac\nimport time\nimport urllib.request\n\nAPI_KEY = \"YOUR_API_KEY\"\nHOST    = \"open-agent.gds-neo.link-dev.link\"\nPATH    = \"/v1/activity/search-activities\"\n\n\ndef signature_key(api_key: str, timestamp: str, host: str, path: str) -> str:\n    \"\"\"Compute the `signature-key` header value for a GDS API request.\"\"\"\n    def hmac_sha256(key: bytes, msg: bytes) -> bytes:\n        return hmac.new(key, msg, hashlib.sha256).digest()\n\n    k1 = hmac_sha256(b\"congaree\" + api_key.encode(), timestamp.encode())\n    k2 = hmac_sha256(k1, host.encode())\n    k3 = hmac_sha256(k2, path.encode())\n    k  = hmac_sha256(k3, b\"veltra\")\n    # Keep the \"=\" padding; the server requires it.\n    return base64.urlsafe_b64encode(k).decode()\n\n\ndef main():\n    timestamp = time.strftime(\"%Y%m%dT%H%M%SZ\", time.gmtime())\n    sig = signature_key(API_KEY, timestamp, HOST, PATH)\n\n    req = urllib.request.Request(\n        f\"https://{HOST}{PATH}?page_size=20\",\n        headers={\n            \"ota-id\":        \"LINKTIVITY\",\n            \"group-id\":      \"[default-group]:LINKTIVITY\",\n            \"api-key-id\":    \"VJgSBDVXXXXXXXXX\",\n            \"timestamp\":     timestamp,\n            \"signature-key\": sig,\n        },\n    )\n    with urllib.request.urlopen(req) as resp:\n        print(resp.read().decode())\n\n\nif __name__ == \"__main__\":\n    main()\n```\n\n**Java**\n\n```java\nimport java.net.URI;\nimport java.net.http.HttpClient;\nimport java.net.http.HttpRequest;\nimport java.net.http.HttpResponse;\nimport java.nio.charset.StandardCharsets;\nimport java.time.Instant;\nimport java.time.ZoneOffset;\nimport java.time.format.DateTimeFormatter;\nimport java.util.Base64;\nimport javax.crypto.Mac;\nimport javax.crypto.spec.SecretKeySpec;\n\npublic class SignatureExample {\n    private static final String API_KEY = \"YOUR_API_KEY\";\n    private static final String HOST    = \"open-agent.gds-neo.link-dev.link\";\n    private static final String PATH    = \"/v1/activity/search-activities\";\n\n    /** Compute the `signature-key` header value for a GDS API request. */\n    static String signatureKey(String apiKey, String timestamp, String host, String path) throws Exception {\n        byte[] k1 = hmacSha256((\"congaree\" + apiKey).getBytes(StandardCharsets.UTF_8), timestamp.getBytes(StandardCharsets.UTF_8));\n        byte[] k2 = hmacSha256(k1, host.getBytes(StandardCharsets.UTF_8));\n        byte[] k3 = hmacSha256(k2, path.getBytes(StandardCharsets.UTF_8));\n        byte[] k  = hmacSha256(k3, \"veltra\".getBytes(StandardCharsets.UTF_8));\n        // Keep the \"=\" padding; the server requires it.\n        return Base64.getUrlEncoder().encodeToString(k);\n    }\n\n    private static byte[] hmacSha256(byte[] key, byte[] msg) throws Exception {\n        Mac mac = Mac.getInstance(\"HmacSHA256\");\n        mac.init(new SecretKeySpec(key, \"HmacSHA256\"));\n        return mac.doFinal(msg);\n    }\n\n    public static void main(String[] args) throws Exception {\n        String timestamp = DateTimeFormatter.ofPattern(\"yyyyMMdd'T'HHmmss'Z'\").withZone(ZoneOffset.UTC).format(Instant.now());\n        String sig = signatureKey(API_KEY, timestamp, HOST, PATH);\n\n        HttpRequest req = HttpRequest.newBuilder()\n            .uri(URI.create(\"https://\" + HOST + PATH + \"?page_size=20\"))\n            .header(\"ota-id\", \"LINKTIVITY\")\n            .header(\"group-id\", \"[default-group]:LINKTIVITY\")\n            .header(\"api-key-id\", \"VJgSBDVXXXXXXXXX\")\n            .header(\"timestamp\", timestamp)\n            .header(\"signature-key\", sig)\n            .GET()\n            .build();\n\n        HttpResponse<String> resp = HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());\n        System.out.println(resp.body());\n    }\n}\n```\n\n**PHP**\n\n```php\n<?php\n$apiKey = 'YOUR_API_KEY';\n$host   = 'open-agent.gds-neo.link-dev.link';\n$path   = '/v1/activity/search-activities';\n\n/**\n * Compute the `signature-key` header value for a GDS API request.\n */\nfunction signatureKey(string $apiKey, string $timestamp, string $host, string $path): string {\n    $hmacSha256 = fn($key, $msg) => hash_hmac('sha256', $msg, $key, true);\n\n    $k1 = $hmacSha256('congaree' . $apiKey, $timestamp);\n    $k2 = $hmacSha256($k1, $host);\n    $k3 = $hmacSha256($k2, $path);\n    $k  = $hmacSha256($k3, 'veltra');\n\n    // URL-safe base64; keep the \"=\" padding (server requires it).\n    return strtr(base64_encode($k), '+/', '-_');\n}\n\n$timestamp = gmdate('Ymd\\THis\\Z');\n$sig = signatureKey($apiKey, $timestamp, $host, $path);\n\n$ch = curl_init(\"https://{$host}{$path}?page_size=20\");\ncurl_setopt($ch, CURLOPT_HTTPHEADER, [\n    \"ota-id: LINKTIVITY\",\n    \"group-id: [default-group]:LINKTIVITY\",\n    \"api-key-id: VJgSBDVXXXXXXXXX\",\n    \"timestamp: {$timestamp}\",\n    \"signature-key: {$sig}\",\n]);\ncurl_setopt($ch, CURLOPT_RETURNTRANSFER, true);\necho curl_exec($ch);\ncurl_close($ch);\n```\n\n### End-to-end curl example\n\nA canonical request with all 5 headers filled in:\n\n```bash\ncurl https://open-agent.gds-neo.link-dev.link/v1/activity/search-activities?page_size=20 \\\n  --header 'ota-id: LINKTIVITY' \\\n  --header 'group-id: [default-group]:LINKTIVITY' \\\n  --header 'api-key-id: VJgSBDVxxxxxxxxx' \\\n  --header 'timestamp: 20260521T063324Z' \\\n  --header 'signature-key: 3gjtSDLmvsr4M6RdQ9vY5sYPZ1Y7iV...='\n```\n\n### Common errors\n\n| HTTP | Cause |\n| --- | --- |\n| `401 invalid api-key-id` | `api-key-id` header missing or unknown |\n| `401 invalid signature` | HMAC mismatch — check `host` / `path` exactly match the request line, and `timestamp` is the same string in header and HMAC input |\n| `401 timestamp out of range` | Server clock differs from `timestamp` by more than ±5 minutes; sync your clock to NTP |\n\n# Errors\nA failed request returns an HTTP status derived from a gRPC status code, with this JSON body:\n\n```json\n{\n  \"code\": 9,\n  \"error_code\": \"BOOKING_ADAPTER_BOOKING_NO_AVAILABILITY\",\n  \"message\": \"supplier has no stock for participation date\",\n  \"details\": [\n    {\n      \"metadata\": {\n        \"request_id\": \"e9c30653-eafa-4169-a08e-9e28748adb69\"\n      }\n    }\n  ],\n  \"retryable\": false\n}\n```\n\n| Field | Meaning |\n| --- | --- |\n| `code` | The numeric gRPC status code. The HTTP status derives from it, except that a request using an HTTP method the path does not accept gets HTTP 405 with `code` 12. |\n| `error_code` | The machine-readable error code; never empty. A business code from the table below when one applies, otherwise the name of the gRPC status code (`INVALID_ARGUMENT`, `NOT_FOUND`, `INTERNAL`, ...). Branch on this field. New values may be added at any time: handle a value you do not know by its `code`. |\n| `message` | English text for logs and support tickets. Its wording may change between releases; do not parse it. 4xx responses, and 5xx responses with a business `error_code`, carry text written for the error; any other 5xx carries only the HTTP status text (for example `Internal Server Error`), so quote `request_id` when you contact support. |\n| `details[].metadata` | Context for the error, such as `request_id` and details of the error. |\n| `retryable` | `true`: the same request may be resent as is, after a short wait. `false`: do not resend it as is; act on `error_code`. |\n\nRequests rejected by the authentication check at the HTTP edge are the one exception to this shape: they return `{\"message\": \"...\"}` only.\n\ngRPC status codes. When no business code applies, `error_code` is the name of the gRPC status code and `code` its number:\n\n| error_code | code | HTTP | Meaning | retryable |\n| --- | --- | --- | --- | --- |\n| <a id=\"err-INVALID_ARGUMENT\"></a>`INVALID_ARGUMENT` | 3 | 400 | The request is invalid regardless of system state: the body is not valid JSON, or a field fails validation without a more specific code. | false |\n| <a id=\"err-DEADLINE_EXCEEDED\"></a>`DEADLINE_EXCEEDED` | 4 | 504 | The request passed the 30 second server limit. The outcome is unknown: read the endpoint's description for how to find out. | true |\n| <a id=\"err-NOT_FOUND\"></a>`NOT_FOUND` | 5 | 404 | The requested entity does not exist and no more specific code applies. | false |\n| <a id=\"err-PERMISSION_DENIED\"></a>`PERMISSION_DENIED` | 7 | 403 | The entity exists but belongs to another OTA or OTA group. | false |\n| <a id=\"err-RESOURCE_EXHAUSTED\"></a>`RESOURCE_EXHAUSTED` | 8 | 429 | A quota or rate limit was exceeded. Resend with backoff. | true |\n| <a id=\"err-FAILED_PRECONDITION\"></a>`FAILED_PRECONDITION` | 9 | 400 | The system is not in the state the operation requires and no more specific code applies; the endpoint's description names the cases. | false |\n| <a id=\"err-ABORTED\"></a>`ABORTED` | 10 | 409 | Another request is operating on the same entity (a booking session, a booking, or its bundle). Resend after a few seconds. | true |\n| <a id=\"err-UNIMPLEMENTED\"></a>`UNIMPLEMENTED` | 12 | 405 | The path does not accept the HTTP method used. | false |\n| <a id=\"err-INTERNAL\"></a>`INTERNAL` | 13 | 500 | Internal error. `message` is `Internal Server Error`; quote `request_id` when you contact support. | false |\n| <a id=\"err-UNAVAILABLE\"></a>`UNAVAILABLE` | 14 | 503 | A service the request depends on is unreachable. `message` is `Service Unavailable`. StartCancelBooking and FinalCancelBooking also report their internal failures this way; see those endpoints. | true |\n| <a id=\"err-UNAUTHENTICATED\"></a>`UNAUTHENTICATED` | 16 | 401 | An authentication header is missing, the signature does not match, or `timestamp` is out of range. An unknown API key is reported as `API_KEY_INVALID`. See **Authentication**. | false |\n\nBusiness error codes, by category:\n\n**Common errors**\n\nCan be returned by any endpoint.\n\n| error_code | HTTP | Meaning | metadata |\n| --- | --- | --- | --- |\n| <a id=\"err-VALIDATION_FAILED\"></a>`VALIDATION_FAILED` | 400 | A request field failed validation. One `details` entry per field. | `field`, `constraint` |\n| <a id=\"err-API_KEY_INVALID\"></a>`API_KEY_INVALID` | 401 | The API key id is unknown or disabled. Check the credentials; contact support if they are correct. | — |\n\n**Booking errors**\n\n| error_code | HTTP | Meaning | metadata |\n| --- | --- | --- | --- |\n| <a id=\"err-BOOKING_REQUIRED_INFO_MISSING\"></a>`BOOKING_REQUIRED_INFO_MISSING` | 400 | StartBooking: a required participant or booking field is missing or malformed. One `details` entry per field. | `field`, `constraint` |\n| <a id=\"err-BOOKING_INVALID_FORM_RESPONSE\"></a>`BOOKING_INVALID_FORM_RESPONSE` | 400 | StartBooking: a custom reservation form response is missing or invalid. One `details` entry per response. | `field`, `constraint` |\n| <a id=\"err-BOOKING_NOT_FOUND\"></a>`BOOKING_NOT_FOUND` | 404 | StartCancelBooking, FinalCancelBooking: no booking matches `booking_id`. | `booking_id` |\n| <a id=\"err-BOOKING_ALREADY_CANCELLED\"></a>`BOOKING_ALREADY_CANCELLED` | 400 | StartCancelBooking, FinalCancelBooking: the booking is already cancelled. Treat it as settled. | `booking_id` |\n| <a id=\"err-CANCEL_DEADLINE_PASSED\"></a>`CANCEL_DEADLINE_PASSED` | 400 | StartCancelBooking, FinalCancelBooking: the voucher expiration time has passed. | `booking_id`, `deadline` |\n| <a id=\"err-BOOKING_ALREADY_ISSUED\"></a>`BOOKING_ALREADY_ISSUED` | 400 | StartCancelBooking, FinalCancelBooking: the voucher is redeemed in full or in part. | `booking_id` |\n| <a id=\"err-BOOKING_NOT_CANCELLABLE\"></a>`BOOKING_NOT_CANCELLABLE` | 400 | StartCancelBooking, FinalCancelBooking: the booking status, the cancellation policy in effect, a bulk or bundle constraint, or one child of the bundle forbids cancellation. `message` tells the cases apart. | `booking_id` (for a bundle, the child that blocks the cancellation) |\n| <a id=\"err-CANCEL_NOT_STARTED\"></a>`CANCEL_NOT_STARTED` | 400 | FinalCancelBooking: the booking has no open cancellation request. Call StartCancelBooking first. | `booking_id` |\n| <a id=\"err-CANCEL_REFUND_CHANGED\"></a>`CANCEL_REFUND_CHANGED` | 400 | FinalCancelBooking: the refund amounts changed since StartCancelBooking, so that request is voided. Call StartCancelBooking again to get the current amounts. | `booking_id` |\n\n**Finance errors**\n\n| error_code | HTTP | Meaning | metadata |\n| --- | --- | --- | --- |\n| <a id=\"err-INSUFFICIENT_BALANCE\"></a>`INSUFFICIENT_BALANCE` | 400 | StartBooking, or FinalBooking before the booking is placed with the supplier: the wallet balance does not cover the booking. Nothing is booked: top up, then call StartBooking again, or resend FinalBooking with the same booking session. `retryable` is `false`. | |\n| `INSUFFICIENT_BALANCE` | 503 | FinalBooking, after the booking is placed with the supplier: the wallet balance is insufficient. The booking is held, not failed: top up, then resend FinalBooking with the same booking session. Do not create a new booking. `retryable` is `true`. | |\n\n**Supplier errors**\n\nReturned when the supplier system behind the booking rejects or fails the operation.\n\n| error_code | HTTP | Meaning | metadata |\n| --- | --- | --- | --- |\n| <a id=\"err-BOOKING_ADAPTER_INVALID_ARGUMENT\"></a>`BOOKING_ADAPTER_INVALID_ARGUMENT` | 400 | The supplier rejected a request parameter. | |\n| <a id=\"err-BOOKING_ADAPTER_ARGUMENT_MISSING\"></a>`BOOKING_ADAPTER_ARGUMENT_MISSING` | 400 | A parameter the supplier requires is missing. | `field` (when known) |\n| <a id=\"err-BOOKING_ADAPTER_INTERNAL\"></a>`BOOKING_ADAPTER_INTERNAL` | 500 | The supplier connection failed in a way it could not classify. The outcome is unknown: do not assume the supplier did not act. StartCancelBooking and FinalCancelBooking report it as 503 with `retryable` true instead: run StartCancelBooking → FinalCancelBooking again. | |\n| <a id=\"err-BOOKING_ADAPTER_UNIMPLEMENTED\"></a>`BOOKING_ADAPTER_UNIMPLEMENTED` | 501 | The operation is not supported for this supplier. | |\n| <a id=\"err-BOOKING_ADAPTER_EXTERNAL_PENDING\"></a>`BOOKING_ADAPTER_EXTERNAL_PENDING` | 503 | The supplier is still processing the operation. Do not treat it as failed; resend later. `retryable` is `true`. | |\n| <a id=\"err-BOOKING_ADAPTER_EXTERNAL_FAILED\"></a>`BOOKING_ADAPTER_EXTERNAL_FAILED` | 400 | The supplier rejected the operation. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_NOT_ENOUGH_ALLOTMENT\"></a>`BOOKING_ADAPTER_BOOKING_NOT_ENOUGH_ALLOTMENT` | 400 | The supplier does not have enough stock for the requested quantity. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_NO_AVAILABILITY\"></a>`BOOKING_ADAPTER_BOOKING_NO_AVAILABILITY` | 400 | The supplier has no availability for the requested date or session. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_CAPACITY_CONSTRAINT\"></a>`BOOKING_ADAPTER_BOOKING_CAPACITY_CONSTRAINT` | 400 | The supplier rejected the ordered quantity. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_DEADLINE_PASSED\"></a>`BOOKING_ADAPTER_BOOKING_DEADLINE_PASSED` | 400 | The supplier's booking or cancellation deadline has passed. | |\n| <a id=\"err-BOOKING_ADAPTER_EXTERNAL_OUT_OF_SERVICE\"></a>`BOOKING_ADAPTER_EXTERNAL_OUT_OF_SERVICE` | 503 | The supplier system is under maintenance. Resend later. `retryable` is `true`. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_NOT_FOUND\"></a>`BOOKING_ADAPTER_BOOKING_NOT_FOUND` | 404 | The supplier does not know the booking. | |\n| <a id=\"err-BOOKING_ADAPTER_BOOKING_NOT_CANCELLABLE\"></a>`BOOKING_ADAPTER_BOOKING_NOT_CANCELLABLE` | 400 | The supplier refuses to cancel the booking. | |\n\nFor `BOOKING_ADAPTER_*` codes, `message` is an English sentence describing the failure. It never contains the supplier's own wording, so tell the cases apart by `error_code`.\n\n# Recommended Reservation Flow\n[![Recommended flow to make bookings](https://mermaid.ink/img/pako:eNqNk0Fv2kAQhf_KaA_tJT70iqpIxBiEgozUuJVajKrBO8CI9S5dzxIRxH_vGgK12iSNT9bqvW_mPa8PqnKaVE8tjXus1ugFikFpIT79Wd9CaMgDWyGrQRxsg4-ihj4v_O3SeUALuEM2uDAEGoXAXU54YVj2UKGJXvRzSBJ4ZFmDpoY9afgV0Eor-XB2Jskt3B1KlaIxMBnn98X427j43o5akSTPczhSmZqEreYd64CmVMfzwnftiOn9CZS-DGokJkwWzm3Yrq7GtGPMorHADQHC1lOCQdbO8xMKO3tJ3ZbysYEqpmCJCb2-orIOavjyDku2aPiJ_llj2PGO_qxR4VaCp3cMH3UAg2mezUr1EKqKmqY1n1Zpm3yem2iSWGkDLXXnQrUmX6p5p8t8dK4kH_wcfpoN--PJ1y_ZvNNZ5n30vqrJ_gcZvgNy0hRckwtyrrUT9i3434J0mhf9tIilpM4KVgITthuJt0j2Mbe6UTX5GlnHv-HQIkola6qpVL34qmmJwUipSnuM0ngv3MPeVqonPtCNCtv2Dg8YVx5r1Vuiaa6nWfxQzl-UW7Q_nLtojr8BUdgXWw?type=png)](https://mermaid.live/edit#pako:eNqNk0Fv2kAQhf_KaA_tJT70iqpIxBiEgozUuJVajKrBO8CI9S5dzxIRxH_vGgK12iSNT9bqvW_mPa8PqnKaVE8tjXus1ugFikFpIT79Wd9CaMgDWyGrQRxsg4-ihj4v_O3SeUALuEM2uDAEGoXAXU54YVj2UKGJXvRzSBJ4ZFmDpoY9afgV0Eor-XB2Jskt3B1KlaIxMBnn98X427j43o5akSTPczhSmZqEreYd64CmVMfzwnftiOn9CZS-DGokJkwWzm3Yrq7GtGPMorHADQHC1lOCQdbO8xMKO3tJ3ZbysYEqpmCJCb2-orIOavjyDku2aPiJ_llj2PGO_qxR4VaCp3cMH3UAg2mezUr1EKqKmqY1n1Zpm3yem2iSWGkDLXXnQrUmX6p5p8t8dK4kH_wcfpoN--PJ1y_ZvNNZ5n30vqrJ_gcZvgNy0hRckwtyrrUT9i3434J0mhf9tIilpM4KVgITthuJt0j2Mbe6UTX5GlnHv-HQIkola6qpVL34qmmJwUipSnuM0ngv3MPeVqonPtCNCtv2Dg8YVx5r1Vuiaa6nWfxQzl-UW7Q_nLtojr8BUdgXWw)\n\n",
     "version": "1.0.{DATE}",
     "contact": {
       "name": "API Support",
@@ -166,7 +166,7 @@
           },
           {
             "name": "language_code",
-            "description": "Optional. Display language for activity / plan text in the response.\nIf unset, results are returned in every available language.",
+            "description": "Optional. Display language for activity / plan text in the response.\nIf unset, results are returned in every available language (each text field carries all translations).\nNote: the availability endpoints require `language_code` because they return single-language strings.",
             "in": "query",
             "required": false,
             "type": "string",
@@ -836,7 +836,7 @@
           },
           {
             "name": "language_code",
-            "description": "Optional. Display language for activity / plan text in the response.\nIf unset, every available language is returned.",
+            "description": "Optional. Display language for activity / plan text in the response.\nIf unset, every available language is returned (each text field carries all translations).\nNote: the availability endpoints require `language_code` because they return single-language strings.",
             "in": "query",
             "required": false,
             "type": "string",
@@ -1097,7 +1097,7 @@
         "parameters": [
           {
             "name": "language_code",
-            "description": "Display language for activity / plan names in the response.",
+            "description": "Required. Display language for activity / plan / unit names in the response.\nUnlike `search-activities` / `get-activity-detail` (where it is optional and omitting it returns\nevery language), names here are returned as plain strings in a single language, so it must be set.\nUse one of the activity's `language_codes`; names may be empty for a language the activity does not provide.",
             "in": "query",
             "required": true,
             "type": "string",
@@ -1137,21 +1137,21 @@
           },
           {
             "name": "target_date_from",
-            "description": "Inclusive lower bound of the calendar range. Format `YYYY-MM-DD`. Must be on or before `target_date_to`.",
+            "description": "Inclusive lower bound of the calendar range, in the activity's local time zone. Format `YYYY-MM-DD`.\nMust be on or before `target_date_to`.",
             "in": "query",
             "required": true,
             "type": "string"
           },
           {
             "name": "target_date_to",
-            "description": "Inclusive upper bound of the calendar range. Format `YYYY-MM-DD`. Must be on or after `target_date_from`.",
+            "description": "Inclusive upper bound of the calendar range, in the activity's local time zone. Format `YYYY-MM-DD`.\nMust be on or after `target_date_from`.",
             "in": "query",
             "required": true,
             "type": "string"
           },
           {
             "name": "display_currency",
-            "description": "Optional ISO-4217 currency code for `price` fields in the response. Defaults to the OTA's configured currency.",
+            "description": "Optional ISO-4217 currency code for `units[].display_amount` in the response.\nDefaults to the OTA's configured currency. Does not affect `units[].payment_amount`.",
             "in": "query",
             "required": false,
             "type": "string",
@@ -1401,7 +1401,7 @@
     "/v1/booking/ota/start-booking": {
       "post": {
         "summary": "1.1 StartBooking",
-        "description": "Create a booking transaction. This is the first step of the booking process (Reserve phase).\n\nUpon success, a `session_id` will be returned, which is required for the subsequent **[FinalBooking]** API call.",
+        "description": "Create a booking transaction. This is the first step of the booking process (Reserve phase).\n\nUpon success, a `session_id` will be returned, which is required for the subsequent **[FinalBooking]** API call.\n\n`participant_info` is normalized and validated before the reservation is made; see that field for the per-field rules. A request that fails validation returns HTTP 400 with one error detail per invalid field and makes no reservation.",
         "operationId": "StartBooking",
         "responses": {
           "200": {
@@ -1721,7 +1721,7 @@
     "/v1/booking/ota/update-booking-participant-info": {
       "post": {
         "summary": "3 UpdateBookingParticipantInfo",
-        "description": "Update participant information for a confirmed booking.\n\nProvide `booking_id` and the complete `participant_info`. The request replaces the stored participant information as a whole: any field left out is cleared, so send the full structure rather than only the changed fields (the per-participant `unit_title` is the exception: Link always fills it from the booking). Link then sends the update to the supplier and regenerates the voucher; the response carries the new voucher URLs. Sub-orders of a bulk booking cannot be updated.",
+        "description": "Update participant information for a confirmed booking.\n\nProvide `booking_id` and the complete `participant_info`. The request replaces the stored participant information as a whole: any field left out is cleared, so send the full structure rather than only the changed fields (the per-participant `unit_title` is the exception: Link always fills it from the booking). Link then sends the update to the supplier and regenerates the voucher; the response carries the new voucher URLs. Sub-orders of a bulk booking cannot be updated.\n\nThe submitted `participant_info` is normalized and validated with the same rules as StartBooking (see the `participant_info` field of StartBooking for the full list) before anything is changed. Which fields are required comes from the activity's current `booking_form`. A request that fails validation returns HTTP 400 with one error detail per invalid field; the booking, the supplier and the voucher are left untouched.",
         "operationId": "UpdateBookingParticipantInfo",
         "responses": {
           "200": {
@@ -1761,7 +1761,7 @@
     "/v1/booking/ota/start-cancel-booking": {
       "post": {
         "summary": "4.1 StartCancelBooking",
-        "description": "Initiate a cancellation request for a confirmed booking. This is the first step of the cancellation process.\n\nA 200 response means the booking can be cancelled and a cancellation request now exists, or an earlier open request was reused. `cancel_refund_display` holds the refund breakdown, and a bundle parent also returns one entry per child in `child_cancel_refund_display`. Call **[FinalCancelBooking]** next.\n\n`cancel_check_code` is always `CAN_BE_CANCELLED` on a 200 response. The field is deprecated and will be removed in a later version; a booking that cannot be cancelled is reported as an HTTP error with a business `error_code`, never as a 200.\n\nCalling this endpoint again while a cancellation request is already open returns that request together with the refund amounts calculated when it was created. Those amounts are the ones FinalCancelBooking applies, so if the cancellation fee changes in between, FinalCancelBooking fails and the flow starts here again.",
+        "description": "Initiate a cancellation request for a confirmed booking. This is the first step of the cancellation process.\n\nA 200 response means the booking can be cancelled and a cancellation request now exists, or an earlier open request was reused. `cancel_refund_display` holds the refund breakdown; for a bundle it is the parent's breakdown, which is the amount the OTA is charged or refunded for the whole bundle. Call **[FinalCancelBooking]** next.\n\n`cancel_check_code` is always `CAN_BE_CANCELLED` on a 200 response. The field is deprecated and will be removed in a later version; a booking that cannot be cancelled is reported as an HTTP error with a business `error_code`, never as a 200.\n\nCalling this endpoint again while a cancellation request is already open returns that request together with the refund amounts calculated when it was created. Those amounts are the ones FinalCancelBooking applies, so if the cancellation fee changes in between, FinalCancelBooking fails and the flow starts here again.\n\nA 5xx or a timeout does not establish the outcome. Run StartCancelBooking → FinalCancelBooking again; resending FinalCancelBooking alone is only for a 200 with `CANCEL_PENDING` or an error with `retryable` true.",
         "operationId": "StartCancelBooking",
         "responses": {
           "200": {
@@ -1982,7 +1982,7 @@
         },
         "display_price": {
           "$ref": "#/definitions/price.Price",
-          "title": "a reference price base on requested display currency"
+          "description": "Reference \"from\" price of the activity, for display purposes only: the lowest `plans[].display_price`\n(by gross) among the activity's plans. `gross` is the selling price and `net` is taken from the same\nprice entry; `net` is 0 when the caller is not allowed to see net prices.\nConverted to the requested `display_currency` (OTA's configured currency when unset); always check\n`currency_code` for the actual currency. Not tied to a specific date — use the availability endpoints\nfor the actual price of a given date."
         },
         "media": {
           "$ref": "#/definitions/Media",
@@ -2037,7 +2037,7 @@
             "type": "number",
             "format": "double"
           },
-          "title": "price in different currencies"
+          "description": "Reference \"from\" price of the plan, for listing / display purposes only.\n\n- Key: ISO-4217 currency code (e.g. `JPY`). The map always contains exactly one entry:\n  the requested `display_currency`, or the OTA's configured currency when it is unset.\n- Value: gross (selling) price for one unit of the plan's standard-price unit\n  (typically the adult unit), e.g. `{\"JPY\": 12000}`.\n- It is not tied to a specific date or plan item. Use `get-price-and-availability-calendar`\n  or `check-availability-and-calculate-amount` for the actual price of a given date."
         }
       }
     },
@@ -2146,7 +2146,7 @@
         },
         "format_hint": {
           "type": "string",
-          "description": "human-readable format hint, e.g. \"YYYY-MM-DD\", \"HH:mm\",\n\"ISO 3166-1 alpha-3\", \"decimal number\". Empty when not applicable."
+          "description": "Human-readable hint of the rule StartBooking enforces on the value, e.g. \"YYYY-MM-DD\", \"HH:mm\",\n\"at most 100 characters\", \"digits, +, -, ( ) only; 8-20 characters\", \"ISO 3166-1 alpha-3\",\n\"MALE, FEMALE or OTHER\". Empty when nothing beyond `type` is enforced (e.g. free-text sizes).\nThe complete rule set, including normalization, is documented on StartBooking's `participant_info` field."
         }
       },
       "description": "Standard booking field descriptor."
@@ -2216,11 +2216,11 @@
       "properties": {
         "description": {
           "$ref": "#/definitions/Text",
-          "description": "translated description base on the rule, may empty, just for reference.\nUse the custom_description as the final cancellation policy text."
+          "description": "Generated description of this rule. Informational only and may be empty;\nuse `CancellationPolicy.custom_description` as the policy text."
         },
         "applies_from": {
           "$ref": "#/definitions/TimePoint",
-          "description": "The time point from which this rule takes effect.\ne.g. anchor=BOOKING_CONFIRMED offset=0 means the rule applies from the moment the booking is confirmed."
+          "description": "The time point from which this rule takes effect.\ne.g. anchor=BOOKING_CONFIRMED with no offset means the rule applies from the moment the booking is confirmed."
         },
         "free": {
           "type": "boolean",
@@ -2234,7 +2234,7 @@
         "charge_fixed": {
           "type": "number",
           "format": "double",
-          "description": "Fixed amount charged in the display currency."
+          "description": "Fixed amount charged, in the activity's `original_currency` (not converted to `display_currency`)."
         },
         "not_cancellable": {
           "type": "boolean",
@@ -3019,11 +3019,11 @@
         },
         "supplier_id": {
           "type": "string",
-          "title": "supplier id"
+          "description": "supplier id. Always the same as `activity.supplier_id`."
         },
         "supplier_name": {
           "type": "string",
-          "title": "supplier name"
+          "description": "supplier name. Always the same as `activity.supplier_name`."
         },
         "title": {
           "$ref": "#/definitions/Text",
@@ -3065,7 +3065,7 @@
         },
         "booking_rule": {
           "$ref": "#/definitions/BookingRule",
-          "title": "booking rule"
+          "description": "Booking rule (already resolved; apply as-is). All times are in the activity's `timezone`.\n- `booking_period`: how far in advance the plan can be booked, counted from today.\n- `booking_deadline`: advance-booking deadline that applies to every plan item. A date D can be booked\n  until `deadline_time` on (D - `before_days`). When `booking_deadline` is absent, D can be booked until\n  00:00 of D (i.e. no same-day booking).\nIn addition, same-day bookings are closed after `plan_items[].cutoff_time`. Both checks apply; a booking\nmust satisfy both. Neither applies to `FREE_SALE_OPEN_DATE` plans."
         },
         "booking_form": {
           "$ref": "#/definitions/external.BookingForm",
@@ -3097,7 +3097,7 @@
         },
         "display_price": {
           "$ref": "#/definitions/price.Price",
-          "title": "a reference price base on requested display currency"
+          "description": "Reference \"from\" price of the plan, for display purposes only: the lowest gross price, across all of\nthe plan's price periods, of the plan's standard-price unit (typically the adult unit). `net` is taken\nfrom the same price entry and is 0 when the caller is not allowed to see net prices.\nConverted to the requested `display_currency` (OTA's configured currency when unset); always check\n`currency_code` for the actual currency. Not tied to a specific date — use the availability endpoints\nfor the actual price of a given date."
         },
         "media": {
           "$ref": "#/definitions/Media",
@@ -3147,7 +3147,7 @@
         },
         "cutoff_time": {
           "type": "string",
-          "title": "a HH:MM local time value indicate the cut off booking time of the plan item , if any"
+          "description": "Same-day booking cutoff of the plan item, as an HH:MM local time in the activity's `timezone`, if any.\nOnly applies when booking for today: once this time has passed, today's slot of this plan item can no\nlonger be booked. Booking for a future date is governed by `booking_rule.booking_deadline` only.\nUsually equal to `start_time`."
         }
       }
     },
@@ -3525,7 +3525,7 @@
         },
         "day_offset": {
           "$ref": "#/definitions/DayOffset",
-          "description": "Day-boundary offset with a specific local time.\ne.g. num_days=-3, time_of_day=\"23:59\" = 3 days before activity start at 23:59 local time."
+          "description": "Day-boundary offset with a specific local time (activity's `timezone`).\ne.g. num_days=-3, time_of_day=\"23:59\" = 23:59 local time, 3 calendar days before the activity date."
         }
       },
       "description": "A point in time expressed as an offset from an anchor."
@@ -3832,7 +3832,7 @@
       "properties": {
         "custom_description": {
           "$ref": "#/definitions/Text",
-          "description": "custom description for this cancellation policy."
+          "description": "Authoritative cancellation policy text written by the supplier. Show it to travelers as-is."
         },
         "rules": {
           "type": "array",
@@ -3840,9 +3840,10 @@
             "type": "object",
             "$ref": "#/definitions/CancellationRule"
           },
-          "description": "Cancellation rules ordered most-restrictive-first.\ne.g. rule[0] might be \"not cancellable on activity day\", rule[1] \"100% within 24h\", rule[2] \"free before that\".\nRules are ordered most-restrictive-first for better display purposes.\nThe actual applicable fee is always determined server-side at cancel time."
+          "description": "Cancellation rules, ordered most-restrictive-first.\ne.g. rules[0] \"not cancellable from activity start\", rules[1] \"100% from 24h before\", rules[2] \"free from booking confirmation\".\nTo estimate the fee for a given cancellation time, take the first rule whose `applies_from` is not after that time."
         }
-      }
+      },
+      "description": "CancellationPolicy describes the cancellation fees of an activity.\n\n- `custom_description` is the authoritative policy text. Show it to travelers as-is.\n- `rules` is a structured form of the same policy, for display or estimation only.\n  `rules[].description` is informational, may be empty, and must not be used in place of `custom_description`.\n- The fee actually charged is always determined server-side at cancel time; `StartCancelBooking` returns it."
     },
     "neo_datetime.Date": {
       "type": "object",
@@ -3906,30 +3907,36 @@
       "type": "object",
       "properties": {
         "language_code": {
-          "$ref": "#/definitions/Language"
+          "$ref": "#/definitions/Language",
+          "description": "Required. Display language for activity / plan names in the response.\nUnlike `search-activities` / `get-activity-detail` (where it is optional and omitting it returns\nevery language), names here are returned as plain strings in a single language, so it must be set.\nUse one of the activity's `language_codes`; names may be empty for a language the activity does not provide."
         },
         "activity_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The activity identifier returned by `search-activities` or `get-activity-detail`."
         },
         "plan_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The plan identifier. Returns `NOT_FOUND` if the plan does not belong to the activity."
         },
         "plan_item_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The plan item identifier, from `plans[].plan_items[].plan_item_id` of `get-activity-detail`.\nIf it does not belong to the plan, the response is returned with `availability_status` = `NG` and zero amounts."
         },
         "target_date": {
           "type": "string",
-          "title": "target_date: Get date for price and availability\nFormat\"yyyy-MM-dd\""
+          "description": "The date to check, in the activity's local time zone. Format `YYYY-MM-DD`.\nReturns `FAILED_PRECONDITION` if the date has passed or the plan item's same-day cutoff time has passed."
         },
         "units": {
           "type": "array",
           "items": {
             "type": "object",
             "$ref": "#/definitions/unitRequest"
-          }
+          },
+          "description": "The units and quantities to check.\nEach `plan_unit_id` should appear at most once."
         },
         "display_currency": {
-          "$ref": "#/definitions/CurrencyCode"
+          "$ref": "#/definitions/CurrencyCode",
+          "description": "Optional ISO-4217 currency code for `plan_items[].display_amount` in the response.\nDefaults to the OTA's configured currency. Does not affect `original_amount` or `payment_amount`."
         }
       },
       "required": [
@@ -3944,30 +3951,36 @@
       "type": "object",
       "properties": {
         "activity_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The activity identifier, same as the request."
         },
         "activity_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Activity name in `language_code`."
         },
         "plan_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The plan identifier, same as the request."
         },
         "plan_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Plan name in `language_code`."
         },
         "target_date": {
           "type": "string",
-          "title": "Format\"yyyy-MM-dd\""
+          "description": "The checked date, same as the request. Format `YYYY-MM-DD`."
         },
         "plan_items": {
           "type": "array",
           "items": {
             "type": "object",
             "$ref": "#/definitions/CheckAvailabilityAndCalculateAmountResponse.planItem"
-          }
+          },
+          "description": "Always contains exactly one entry: the requested plan item."
         },
         "language_code": {
-          "$ref": "#/definitions/Language"
+          "$ref": "#/definitions/Language",
+          "description": "The language used for names in this response, same as the request."
         }
       }
     },
@@ -3975,25 +3988,32 @@
       "type": "object",
       "properties": {
         "plan_item_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The plan item identifier. Empty if `plan_item_id` in the request does not belong to the plan."
         },
         "plan_item_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Plan item name in `language_code`."
         },
         "confirmation_type": {
-          "$ref": "#/definitions/ConfirmationType"
+          "$ref": "#/definitions/ConfirmationType",
+          "description": "How bookings for this plan are confirmed."
         },
         "availability_status": {
-          "$ref": "#/definitions/AvailabilityStatus"
+          "$ref": "#/definitions/AvailabilityStatus",
+          "description": "`OK` only if all of the following are true, otherwise `NG`:\n  - enough inventory remains for the requested quantity (units that do not take a seat, such as infants, are not counted);\n  - every requested unit has a price on `target_date`;\n  - the supplier's system (if any) confirms availability."
         },
         "original_amount": {
-          "$ref": "#/definitions/price.Price"
+          "$ref": "#/definitions/price.Price",
+          "description": "Total amount in the supplier's currency: the sum of each unit's price × `request_quantity`.\nThis is the price before currency conversion, not a price before discount.\nAll three amounts are `0` when `availability_status` is `NG`.\nIn all three amounts, `net` is 0 when the caller is not allowed to see net prices."
         },
         "display_amount": {
-          "$ref": "#/definitions/price.Price"
+          "$ref": "#/definitions/price.Price",
+          "description": "Same total as `original_amount`, converted to `display_currency` at the current exchange rate."
         },
         "payment_amount": {
-          "$ref": "#/definitions/price.Price"
+          "$ref": "#/definitions/price.Price",
+          "description": "Same total as `original_amount`, converted to the OTA's configured settlement currency.\nThis is the amount used for billing, regardless of `display_currency`."
         }
       }
     },
@@ -4001,20 +4021,24 @@
       "type": "object",
       "properties": {
         "activity_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The activity identifier, same as the request."
         },
         "activity_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Activity name in `language_code`."
         },
         "plans": {
           "type": "array",
           "items": {
             "type": "object",
             "$ref": "#/definitions/plan"
-          }
+          },
+          "description": "One entry per plan. Contains only the requested plan when `plan_id` is set."
         },
         "language_code": {
-          "$ref": "#/definitions/Language"
+          "$ref": "#/definitions/Language",
+          "description": "The language used for names in this response, same as the request."
         }
       }
     },
@@ -4023,14 +4047,15 @@
       "properties": {
         "date": {
           "type": "string",
-          "title": "Date in YYYY-MM-DD format"
+          "description": "Date in the activity's local time zone. Format `YYYY-MM-DD`."
         },
         "plan_items": {
           "type": "array",
           "items": {
             "type": "object",
             "$ref": "#/definitions/plan.planItem"
-          }
+          },
+          "description": "Plan items (time slots / sessions) for this date, sorted by `plan_item_name`.\nEmpty when the plan has no inventory set up for this date."
         }
       }
     },
@@ -4038,20 +4063,24 @@
       "type": "object",
       "properties": {
         "plan_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The plan identifier."
         },
         "plan_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Plan name in `language_code`."
         },
         "confirmation_type": {
-          "$ref": "#/definitions/ConfirmationType"
+          "$ref": "#/definitions/ConfirmationType",
+          "description": "How bookings for this plan are confirmed."
         },
         "days": {
           "type": "array",
           "items": {
             "type": "object",
             "$ref": "#/definitions/day"
-          }
+          },
+          "description": "One entry per date from `target_date_from` to `target_date_to`, both inclusive, in ascending order."
         }
       }
     },
@@ -4059,21 +4088,24 @@
       "type": "object",
       "properties": {
         "plan_item_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The plan item identifier."
         },
         "plan_item_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Plan item name in `language_code`."
         },
         "units": {
           "type": "array",
           "items": {
             "type": "object",
             "$ref": "#/definitions/unit"
-          }
+          },
+          "description": "Units (ticket types such as adult / child) that have a price on this date.\nEmpty when no price is set for this date; such a date cannot be booked."
         },
         "start_time": {
           "type": "string",
-          "title": "a HH:MM local time value indicate the start time of this plan item, if any"
+          "description": "Start time of this plan item in the activity's local time zone. Format `HH:MM`. Empty if the plan item\nhas no fixed start time."
         }
       }
     },
@@ -4081,29 +4113,37 @@
       "type": "object",
       "properties": {
         "plan_unit_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The unit identifier."
         },
         "unit_name": {
-          "type": "string"
+          "type": "string",
+          "description": "Unit name in `language_code`."
         },
         "allotment_quantity": {
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "description": "Remaining inventory of the plan item on this date. This is a single pool shared by all units of the\nplan item (see `allotment_type`), so every unit under the same plan item has the same value.\n`0` when sold out, when the booking window has closed, or when the same-day cutoff time has passed."
         },
         "allotment_type": {
-          "$ref": "#/definitions/AllotmentType"
+          "$ref": "#/definitions/AllotmentType",
+          "description": "How `allotment_quantity` is counted. Currently always `UNIT_SHARED`."
         },
         "availability_status": {
-          "$ref": "#/definitions/AvailabilityStatus"
+          "$ref": "#/definitions/AvailabilityStatus",
+          "description": "`OK` when `allotment_quantity` is greater than 0, otherwise `NG`.\nThis is a quick indicator for display only. Call `check-availability-and-calculate-amount` to confirm\navailability for a specific quantity before booking."
         },
         "display_amount": {
-          "$ref": "#/definitions/price.Price"
+          "$ref": "#/definitions/price.Price",
+          "description": "Price of ONE unit (not multiplied by any quantity), in `display_currency`.\n`gross` is the selling price; `net` is the OTA's purchase price, and is 0 when the caller is not allowed to see net prices.\nConverted from the supplier's currency at the current exchange rate when the currencies differ."
         },
         "payment_amount": {
-          "$ref": "#/definitions/price.Price"
+          "$ref": "#/definitions/price.Price",
+          "description": "Price of ONE unit (not multiplied by any quantity), in the OTA's configured settlement currency.\nThis is the amount used for billing, regardless of `display_currency`."
         },
         "unit_type": {
-          "$ref": "#/definitions/UnitType"
+          "$ref": "#/definitions/UnitType",
+          "description": "The unit category, e.g. adult or child."
         }
       }
     },
@@ -4111,11 +4151,13 @@
       "type": "object",
       "properties": {
         "plan_unit_id": {
-          "type": "string"
+          "type": "string",
+          "description": "The unit identifier, from `plans[].units[].plan_unit_id` of `get-activity-detail`.\nUnknown identifiers are ignored and do not count toward the amount or the quantity check."
         },
         "request_quantity": {
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "description": "Number of this unit to book."
         }
       },
       "required": [
@@ -4685,10 +4727,10 @@
               "hotel_tel": "090-5564-9487",
               "arrival_date": "2026-02-05",
               "arrival_time": "02:00",
-              "arrival_flight_number": "中華航空CI220",
+              "arrival_flight_number": "CI220",
               "departure_date": "2026-02-19",
               "departure_time": "04:00",
-              "departure_flight_number": "中華航空CI221",
+              "departure_flight_number": "CI221",
               "destination_email": "xihe.liu@linktivity.co.jp",
               "destination_tel": "090-5564-9487",
               "participant_resident_region": "CHN",
@@ -4721,13 +4763,13 @@
                     ]
                   }
                 ],
-                "passport_first_name": "竺",
-                "passport_last_name": "王",
+                "passport_first_name": "ZHU",
+                "passport_last_name": "WANG",
                 "passport_nationality": "CHN",
-                "passport_number": "123",
+                "passport_number": "E12345678",
                 "date_of_birth": "2020-01-22",
-                "age": 4,
-                "gender": "male",
+                "age": 6,
+                "gender": "MALE",
                 "eyesight": "3.0",
                 "weight_kg": "55",
                 "height_cm": "180",
@@ -4751,13 +4793,13 @@
                     ]
                   }
                 ],
-                "passport_first_name": "彪",
-                "passport_last_name": "王",
+                "passport_first_name": "BIAO",
+                "passport_last_name": "WANG",
                 "passport_nationality": "JPN",
-                "passport_number": "456",
-                "date_of_birth": "2026-02-16",
+                "passport_number": "TR1234567",
+                "date_of_birth": "1986-02-10",
                 "age": 40,
-                "gender": "male",
+                "gender": "MALE",
                 "eyesight": "5.0",
                 "weight_kg": "48",
                 "height_cm": "165",
@@ -4781,13 +4823,13 @@
                     ]
                   }
                 ],
-                "passport_first_name": "習賀",
-                "passport_last_name": "劉",
+                "passport_first_name": "XIHE",
+                "passport_last_name": "LIU",
                 "passport_nationality": "ATA",
-                "passport_number": "789",
-                "date_of_birth": "2026-02-16",
+                "passport_number": "AB9876543",
+                "date_of_birth": "1986-02-10",
                 "age": 40,
-                "gender": "male",
+                "gender": "MALE",
                 "eyesight": "0.2",
                 "weight_kg": "52",
                 "height_cm": "175",
@@ -4834,13 +4876,15 @@
             "per_participant": [
               {
                 "url": "https://content.linktivity.io/65ad05d4-voucher-dev/qrcode/fortest-1.png",
-                "unit_id": "EggKAggSEgIIQQ==",
+                "plan_unit_id": "EggKAggSEgIIQQ==",
+                "unit_index": 1,
                 "unit_title": "大人（18-65）歳",
                 "supplier_ticket_id": "SUPPLIER-TICKET-0001"
               },
               {
                 "url": "https://content.linktivity.io/65ad05d4-voucher-dev/qrcode/fortest-2.png",
-                "unit_id": "CAMSBgoAEgIIEg==",
+                "plan_unit_id": "CAMSBgoAEgIIEg==",
+                "unit_index": 1,
                 "unit_title": "子供（0-18）歳",
                 "supplier_ticket_id": "SUPPLIER-TICKET-0002"
               }
@@ -5247,7 +5291,10 @@
         },
         "unit_id": {
           "type": "string",
-          "format": "int64"
+          "format": "int64",
+          "example": "1888",
+          "description": "Deprecated. it will be removed in a later version. Use `plan_unit_id` and `unit_index` to tell which participant this code belongs to.",
+          "deprecated": true
         },
         "unit_title": {
           "type": "string"
@@ -5258,6 +5305,17 @@
         "payload": {
           "$ref": "#/definitions/Payload",
           "description": "Raw code content and its format behind url."
+        },
+        "plan_unit_id": {
+          "type": "string",
+          "example": "EggKAggSEgIIQQ==",
+          "description": "Unit the participant belongs to: the same value as `participant_info.user_information_fields[].plan_unit_id` and as `plan_unit_items[].id` in StartBooking. Empty for a booking whose voucher was generated before Link started recording it and has not been regenerated since."
+        },
+        "unit_index": {
+          "type": "integer",
+          "format": "int32",
+          "example": 1,
+          "description": "1-based position of the participant within the unit, matching `participant_info.user_information_fields[].unit_index`. Together with `plan_unit_id` it tells which participant this code belongs to. 0 when `plan_unit_id` is empty."
         }
       }
     },
@@ -5934,12 +5992,12 @@
               "hotel_reservation_last_name": "Liu",
               "hotel_reservation_first_name": "Xihe",
               "hotel_tel": "090-5564-9487",
-              "arrival_date": "2026-02-19",
+              "arrival_date": "2026-08-11",
               "arrival_time": "02:02",
-              "arrival_flight_number": "中華航空CI220",
-              "departure_date": "2026-02-20",
+              "arrival_flight_number": "CI220",
+              "departure_date": "2026-08-13",
               "departure_time": "00:02",
-              "departure_flight_number": "中華航空CI221",
+              "departure_flight_number": "CI221",
               "destination_email": "xihe.liu@linktivity.co.jp",
               "destination_tel": "090-5564-9487",
               "participant_resident_region": "CHN",
@@ -5972,13 +6030,13 @@
                     ]
                   }
                 ],
-                "passport_first_name": "三",
-                "passport_last_name": "張",
+                "passport_first_name": "SAN",
+                "passport_last_name": "ZHANG",
                 "passport_nationality": "CHN",
-                "passport_number": "123",
-                "date_of_birth": "2026-02-18",
+                "passport_number": "E12345678",
+                "date_of_birth": "2008-02-18",
                 "age": 18,
-                "gender": "male",
+                "gender": "MALE",
                 "eyesight": "2.0",
                 "weight_kg": "55",
                 "height_cm": "180",
@@ -6002,13 +6060,13 @@
                     ]
                   }
                 ],
-                "passport_first_name": "四",
-                "passport_last_name": "李",
+                "passport_first_name": "SI",
+                "passport_last_name": "LI",
                 "passport_nationality": "JPN",
-                "passport_number": "456",
-                "date_of_birth": "2026-02-23",
+                "passport_number": "TR1234567",
+                "date_of_birth": "1989-12-01",
                 "age": 36,
-                "gender": "female",
+                "gender": "FEMALE",
                 "eyesight": "5.0",
                 "weight_kg": "48",
                 "height_cm": "165",
@@ -6032,13 +6090,13 @@
                     ]
                   }
                 ],
-                "passport_first_name": "五",
-                "passport_last_name": "王",
+                "passport_first_name": "WU",
+                "passport_last_name": "WANG",
                 "passport_nationality": "USA",
-                "passport_number": "789",
-                "date_of_birth": "2026-02-26",
+                "passport_number": "AB9876543",
+                "date_of_birth": "2020-08-26",
                 "age": 5,
-                "gender": "female",
+                "gender": "FEMALE",
                 "eyesight": "0.2",
                 "weight_kg": "52",
                 "height_cm": "175",
@@ -6059,7 +6117,7 @@
               }
             ]
           },
-          "description": "Participant information.",
+          "description": "Participant information.\n\nAt least one of `first_name` / `last_name` (the booking representative) must be non-empty. Which other fields are required comes from the activity's `booking_form` (GetActivityDetail); the rules below apply to every field that is sent, required or not. An optional string that is empty or only whitespace counts as not sent. Violations are rejected with HTTP 400 and one `ErrorInfo` detail per field (`field` = JSON path of the value, `constraint` = the rule it broke).\n\n**Normalization (applied before validation; the normalized value is what gets stored, printed on the voucher and sent to the supplier)**\n- Leading and trailing whitespace is removed from every string in `booking_representative_fields` and `others_information_fields`, and from `passport_number`, `date_of_birth`, `gender`, `eyesight`, `weight_kg`, `height_cm`, `shoe_size_cm` and `clothes_size` of each participant. `passport_first_name` / `passport_last_name` are not trimmed.\n- `hotel_tel`, `destination_tel`: all whitespace removed.\n- `arrival_flight_number`, `departure_flight_number`: whitespace and hyphens removed, then upper-cased (`nh-842` -> `NH842`).\n- `gender`, `passport_number`: upper-cased. `passport_first_name`, `passport_last_name`: curly quotes, dashes and full-width spaces are folded to their ASCII forms, then upper-cased.\n\n**booking_representative_fields**\n- `participant_email_address`, `destination_email`: valid email address, at most 254 characters.\n- `hotel_name`: at most 100 characters. `hotel_address`: at most 200 characters.\n- `hotel_reservation_last_name`, `hotel_reservation_first_name`: letters of any language, spaces, `'`, `-` and `.` only; at most 50 characters.\n- `hotel_tel`, `destination_tel`: digits, `+`, `-`, `(` and `)` only; 8 to 20 characters after whitespace removal.\n- `arrival_date`, `departure_date`: `YYYY-MM-DD`; `arrival_date` must not be after `departure_date`.\n- `arrival_time`, `departure_time`: `HH:mm`, 24-hour, hours and minutes only (`09:30` or `9:30`; no seconds, no trailing text).\n- `arrival_flight_number`, `departure_flight_number`: after normalization, 3 to 8 letters or digits containing at least one letter and one digit, e.g. `NH842`, `5J123`, `ANA842`.\n- `participant_resident_region`: ISO 3166-1 alpha-3 code. `participant_language`: a supported language enum value. `UNDEFINED` is rejected for both.\n\n**others_information_fields**\n- `passengers_quantity`, `participants_quantity`, `luggage_quantity`, `children_without_seat_quantity`, `child_seat_quantity_paid`, `child_seat_quantity_free`: integer, 0 or more.\n- `preferred_start_time`: `HH:mm`, same rule as `arrival_time`.\n- `preferred_pick_up_location`, `preferred_drop_off_location`: at most 200 characters.\n- `preferred_guide_language_code`, `preferred_driver_language_code`: a supported language enum value.\n\n**user_information_fields[]**\n- `passport_first_name`, `passport_last_name`: English letters, spaces, `'`, `-` and `.` only, as printed in the passport's machine-readable zone; at most 50 characters each (surrounding spaces count).\n- `passport_nationality`: ISO 3166-1 alpha-3 code; `UNDEFINED` is rejected.\n- `passport_number`: letters and digits only, 6 to 12 characters.\n- `date_of_birth`: `YYYY-MM-DD`; no range check.\n- `age`: 0 to 120; not cross-checked against `date_of_birth`.\n- `gender`: `MALE`, `FEMALE` or `OTHER` (accepted in any letter case, stored upper-cased).\n- `diving_experience_times`: 0 to 9999.\n- `eyesight`, `weight_kg`, `height_cm`, `shoe_size_cm`, `clothes_size`: free text, no format rule.",
           "allOf": [
             {
               "$ref": "#/definitions/ParticipantInfo"
@@ -6174,31 +6232,16 @@
           "type": "array",
           "example": [
             {
-              "unit": {
-                "unit_id": "1889",
-                "source_unit_id": "281acc35-cee4-46e1-9cb6-f0d329a2b2aa",
-                "activity_id": "361",
-                "source_activity_id": "1QCOA",
-                "plan_id": "1130",
-                "source_plan_id": "DOJZ1",
-                "type": "AGE_CHILD",
-                "name": {
-                  "text": "AGE_CHILD",
-                  "i18n_text": {
-                    "JAPANESE": "子供 (0-18歳)",
-                    "TRADITIONAL_CHINESE": "兒童 (0-18歳)"
-                  }
-                },
-                "range": {
-                  "min_inclusive": 0,
-                  "max_inclusive": 18
-                },
-                "use_as_min_display_price": false,
-                "include_in_capacity": false,
-                "can_be_book_independently": false,
-                "order_count": 1,
-                "custom_id": "CAMSBgoAEgIIEg=="
+              "plan_unit_id": "CAMSBgoAEgIIEg==",
+              "title": {
+                "text": "AGE_CHILD",
+                "i18n_text": {
+                  "JAPANESE": "子供 (0-18歳)",
+                  "TRADITIONAL_CHINESE": "兒童 (0-18歳)"
+                }
               },
+              "unit_type": "AGE_CHILD",
+              "count": 1,
               "supplier_currency_price": {
                 "net": 450,
                 "gross": 500,
@@ -6216,31 +6259,16 @@
               }
             },
             {
-              "unit": {
-                "unit_id": "1888",
-                "source_unit_id": "d741c275-c1b2-466e-b67a-16180dd99d3e",
-                "activity_id": "361",
-                "source_activity_id": "1QCOA",
-                "plan_id": "1130",
-                "source_plan_id": "DOJZ1",
-                "type": "AGE_ADULT_AND_CHILD",
-                "name": {
-                  "text": "AGE_ADULT_AND_CHILD",
-                  "i18n_text": {
-                    "JAPANESE": "大人子供共通 (18-65歳)",
-                    "TRADITIONAL_CHINESE": "成人/兒童 (18-65歳)"
-                  }
-                },
-                "range": {
-                  "min_inclusive": 18,
-                  "max_inclusive": 65
-                },
-                "use_as_min_display_price": true,
-                "include_in_capacity": true,
-                "can_be_book_independently": true,
-                "order_count": 2,
-                "custom_id": "EggKAggSEgIIQQ=="
+              "plan_unit_id": "EggKAggSEgIIQQ==",
+              "title": {
+                "text": "AGE_ADULT_AND_CHILD",
+                "i18n_text": {
+                  "JAPANESE": "大人子供共通 (18-65歳)",
+                  "TRADITIONAL_CHINESE": "成人/兒童 (18-65歳)"
+                }
               },
+              "unit_type": "AGE_ADULT_AND_CHILD",
+              "count": 2,
               "supplier_currency_price": {
                 "net": 900,
                 "gross": 1000,
@@ -6262,7 +6290,7 @@
             "type": "object",
             "$ref": "#/definitions/UnitPrice"
           },
-          "description": "When tickets are sold between a Supplier and an OTA, different currencies may be used by each party, as illustrated below:\n\n  - Supplier currency: Japanese yen  \n    Example: Tokyo Metro\n  - OTA payment currency: U.S. dollars  \n    Example: An OTA that settles with LINK in U.S. dollars\n  - Currency displayed to the traveler: Chinese yuan  \n    Example: A traveler from China purchasing a ticket for Japan through that OTA\n\nIn this case, each price field is used as follows:\n\n  - `supplier_currency_price`  \n    The original price of the product in the currency provided by the Supplier. In the example above, this is the price in Japanese yen.\n\n  - `payment_currency_price`  \n    The price converted by LINK from the Supplier's currency into the OTA's payment currency. In the example above, this is the price converted from Japanese yen to U.S. dollars.\n\n  - `display_currency_price`  \n    The price converted by LINK from the Supplier's currency into the currency displayed to the traveler. In the example above, this is the price converted from Japanese yen to Chinese yuan.\n\nPlease note that the currency used by `display_currency_price` is determined by the `display_currency_code` specified in the request payload.\n\nIf there is no need to display a converted price to the traveler, you may specify a fixed currency, such as Japanese yen, in `display_currency_code` and simply disregard the corresponding `display_currency_price` returned in the response."
+          "description": "One entry per unit requested in `plan_unit_items`, identified by `plan_unit_id`. The three prices are for a single unit; multiply by `count` for the unit's subtotal.\n\nWhen tickets are sold between a Supplier and an OTA, different currencies may be used by each party, as illustrated below:\n\n  - Supplier currency: Japanese yen  \n    Example: Tokyo Metro\n  - OTA payment currency: U.S. dollars  \n    Example: An OTA that settles with LINK in U.S. dollars\n  - Currency displayed to the traveler: Chinese yuan  \n    Example: A traveler from China purchasing a ticket for Japan through that OTA\n\nIn this case, each price field is used as follows:\n\n  - `supplier_currency_price`  \n    The original price of the product in the currency provided by the Supplier. In the example above, this is the price in Japanese yen.\n\n  - `payment_currency_price`  \n    The price converted by LINK from the Supplier's currency into the OTA's payment currency. In the example above, this is the price converted from Japanese yen to U.S. dollars.\n\n  - `display_currency_price`  \n    The price converted by LINK from the Supplier's currency into the currency displayed to the traveler. In the example above, this is the price converted from Japanese yen to Chinese yuan.\n\nPlease note that the currency used by `display_currency_price` is determined by the `display_currency_code` specified in the request payload.\n\nIf there is no need to display a converted price to the traveler, you may specify a fixed currency, such as Japanese yen, in `display_currency_code` and simply disregard the corresponding `display_currency_price` returned in the response."
         }
       },
       "title": "StartBookingResponse"
@@ -6329,14 +6357,6 @@
               "$ref": "#/definitions/external.CancelRefundDisplay"
             }
           ]
-        },
-        "child_cancel_refund_display": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/external.CancelRefundDisplay"
-          },
-          "description": "Refund display information for child bookings (bundle bookings only)."
         }
       },
       "title": "StartCancelBookingResponse"
@@ -6345,16 +6365,112 @@
       "type": "object",
       "properties": {
         "unit": {
-          "$ref": "#/definitions/unit.Unit"
+          "description": "Deprecated. Link's internal unit record; it will be removed in a later version. Read `plan_unit_id`, `title`, `unit_type` and `count` instead.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/unit.Unit"
+            }
+          ],
+          "deprecated": true
         },
         "supplier_currency_price": {
-          "$ref": "#/definitions/price.Price"
+          "$ref": "#/definitions/price.Price",
+          "description": "Price of one unit in the supplier's currency."
         },
         "payment_currency_price": {
-          "$ref": "#/definitions/price.Price"
+          "$ref": "#/definitions/price.Price",
+          "description": "Price of one unit in the OTA's payment currency."
         },
         "display_currency_price": {
-          "$ref": "#/definitions/price.Price"
+          "$ref": "#/definitions/price.Price",
+          "description": "Price of one unit in the currency chosen by `display_currency_code`."
+        },
+        "plan_unit_id": {
+          "type": "string",
+          "example": "EggKAggSEgIIQQ==",
+          "description": "Unit ID: the same value as `plan_unit_items[].id` in this request and `plan_unit_id` in the GetActivityDetail response."
+        },
+        "title": {
+          "$ref": "#/definitions/Text",
+          "description": "Unit title (e.g. Adult (18+), Child (6-11)), in the same form as GetActivityDetail returns it: `text` plus `i18n_text` by language."
+        },
+        "unit_type": {
+          "example": "AGE_ADULT_AND_CHILD",
+          "description": "Unit type (e.g. adult, child); the same enum as `unit_type` in GetActivityDetail.",
+          "type": "string",
+          "enum": [
+            "UNDEFINED",
+            "AGE_ADULT_AND_CHILD",
+            "AGE_ADULT",
+            "AGE_YOUTH",
+            "AGE_CHILD",
+            "AGE_SENIOR",
+            "AGE_INFANT",
+            "AGE_STUDENT",
+            "AGE_HIGH_SCHOOL",
+            "AGE_INTERMEDIATE_SCHOOL",
+            "AGE_ELEMENTARY_SCHOOL",
+            "AGE_COLLEGE",
+            "AGE_GRADUATE",
+            "AGE_OBSERVER",
+            "AGE_ADULT_OBSERVER",
+            "AGE_CHILD_OBSERVER",
+            "AGE_RIDE_ALONG",
+            "AGE_ADULT_RIDE_ALONG",
+            "AGE_CHILD_RIDE_ALONG",
+            "AGE_DRIVER",
+            "AGE_DISABLED_ADULT",
+            "AGE_DISABLED_YOUTH",
+            "AGE_DISABLED_CHILD",
+            "AGE_SUPPORTER_ADULT",
+            "AGE_SUPPORTER_CHILD",
+            "TALL_CHILD",
+            "WEIGHT_ADULT",
+            "WEIGHT_LBS_ADULT",
+            "MINUTES_VEHICLES",
+            "HOURS_VEHICLES",
+            "DAYS_VEHICLES",
+            "WEEKS_VEHICLES",
+            "NIGHTS_VEHICLES",
+            "MINUTES_PERSONS",
+            "HOURS_PERSONS",
+            "DAYS_PERSONS",
+            "WEEKS_PERSONS",
+            "NIGHTS_PERSONS",
+            "MINUTE",
+            "HOUR",
+            "DAY",
+            "WEEK",
+            "NIGHT",
+            "ROOM",
+            "QUANTITY",
+            "CHARTER_SERVICE",
+            "BOAT",
+            "GROUP",
+            "PRINT",
+            "CHARTER_VAR",
+            "GROUP_VAR",
+            "ROOM_VAR",
+            "BOAT_VAR",
+            "PET",
+            "PET_CAT",
+            "PET_DOG",
+            "PET_DOG_S",
+            "PET_DOG_M",
+            "PET_DOG_L",
+            "PET_DOG_XL",
+            "PET_OTHER",
+            "AGE_ADULT_AND_CHILD_2",
+            "AGE_CHILD_2",
+            "DRINK_STANDARD_SET",
+            "DRINK_CHAMPAGNE_SET"
+          ]
+        },
+        "count": {
+          "type": "integer",
+          "format": "int32",
+          "example": 2,
+          "description": "Number of this unit requested in this booking. Multiply a price by `count` to get the unit's subtotal."
         }
       }
     },
@@ -6379,10 +6495,10 @@
               "hotel_tel": "090-5564-9487",
               "arrival_date": "2026-02-05",
               "arrival_time": "02:00",
-              "arrival_flight_number": "中華航空CI220",
+              "arrival_flight_number": "CI220",
               "departure_date": "2026-02-19",
               "departure_time": "04:00",
-              "departure_flight_number": "中華航空CI221",
+              "departure_flight_number": "CI221",
               "destination_email": "xihe.liu@linktivity.co.jp",
               "destination_tel": "090-5564-9487",
               "participant_resident_region": "CHN",
@@ -6415,13 +6531,13 @@
                     ]
                   }
                 ],
-                "passport_first_name": "竺",
-                "passport_last_name": "王",
+                "passport_first_name": "ZHU",
+                "passport_last_name": "WANG",
                 "passport_nationality": "CHN",
-                "passport_number": "123",
+                "passport_number": "E12345678",
                 "date_of_birth": "2020-01-22",
-                "age": 4,
-                "gender": "male",
+                "age": 6,
+                "gender": "MALE",
                 "eyesight": "3.0",
                 "weight_kg": "55",
                 "height_cm": "180",
@@ -6445,13 +6561,13 @@
                     ]
                   }
                 ],
-                "passport_first_name": "彪",
-                "passport_last_name": "王",
+                "passport_first_name": "BIAO",
+                "passport_last_name": "WANG",
                 "passport_nationality": "JPN",
-                "passport_number": "456",
-                "date_of_birth": "2026-02-16",
+                "passport_number": "TR1234567",
+                "date_of_birth": "1986-02-10",
                 "age": 40,
-                "gender": "male",
+                "gender": "MALE",
                 "eyesight": "5.0",
                 "weight_kg": "48",
                 "height_cm": "165",
@@ -6475,13 +6591,13 @@
                     ]
                   }
                 ],
-                "passport_first_name": "習賀",
-                "passport_last_name": "劉",
+                "passport_first_name": "XIHE",
+                "passport_last_name": "LIU",
                 "passport_nationality": "ATA",
-                "passport_number": "789",
-                "date_of_birth": "2026-02-16",
+                "passport_number": "AB9876543",
+                "date_of_birth": "1986-02-10",
                 "age": 40,
-                "gender": "male",
+                "gender": "MALE",
                 "eyesight": "0.2",
                 "weight_kg": "52",
                 "height_cm": "175",
@@ -6508,7 +6624,7 @@
               }
             ]
           },
-          "description": "Updated participant information for the booking. This will completely overwrite the existing participant information.",
+          "description": "Updated participant information for the booking. This will completely overwrite the existing participant information.\n\nThe same normalization and validation rules as `participant_info` in StartBooking apply (see that field for the full per-field list); the activity's current `booking_form` decides which fields are required. If validation fails the call returns HTTP 400 with one `ErrorInfo` detail per field and nothing is changed: the stored participant information, the supplier booking and the voucher all stay as they were.",
           "allOf": [
             {
               "$ref": "#/definitions/ParticipantInfo"
@@ -6601,7 +6717,7 @@
         },
         "gender": {
           "type": "string",
-          "title": "Gender，value have to be \"male\" or \"female\" or \"other\""
+          "description": "Gender, value has to be \"MALE\", \"FEMALE\" or \"OTHER\". Accepted case-insensitively; stored and returned upper-cased."
         },
         "eyesight": {
           "type": "string",
@@ -6805,7 +6921,7 @@
           "type": "string",
           "format": "date-time",
           "example": "2026-04-01T14:53:34.000Z",
-          "description": "Timestamp in RFC3339 format when issued_status changed to ISSUED or PARTIAL. Updated on every change of issued_status, including switching between PARTIAL and ISSUED; unchanged when the status stays the same. null when the booking is not issued, including after an issuance is reverted. e.g. 2026-04-01T14:53:34.000Z"
+          "description": "Timestamp in RFC3339 format of the booking's redemption. For a single booking it is set when issued_status first becomes ISSUED or PARTIAL, moves forward when PARTIAL becomes ISSUED, and stays unchanged when ISSUED becomes PARTIAL (some tickets were reverted) or when issued_status does not change. For a bundle parent it always equals the latest issued_status_updated_at among its redeemed child bookings, so it is refreshed whenever that value changes and can move backwards when the most recently redeemed child is reverted. null when the booking is not issued, including after an issuance is reverted. e.g. 2026-04-01T14:53:34.000Z"
         },
         "order_count": {
           "type": "string",
